@@ -1,15 +1,18 @@
 "use client";
 import React, { useState, useRef, useEffect } from 'react';
-import { Loader2, ExternalLink, Globe, User, ShieldCheck } from 'lucide-react';
+import { Loader2, ExternalLink, Globe, User, ShieldCheck, Sprout } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import PromptBar from './PromptBar';
 import { useLanguage } from '@/contexts/LanguageContext';
 
+type LoadingStage = 'thinking' | 'searching' | 'diagnosing';
+
 export default function ChatInterface({ cropId, sessionId, onSessionChange }: { cropId: string, sessionId: string, onSessionChange: (id: string) => void }) {
   const { t } = useLanguage();
   const [messages, setMessages] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(false);
+  const [loadingStage, setLoadingStage] = useState<LoadingStage>('thinking');
   const [isFetching, setIsFetching] = useState(false);
   const endOfMessagesRef = useRef<HTMLDivElement>(null);
   const prevSessionIdRef = useRef<string>(sessionId);
@@ -33,7 +36,27 @@ export default function ChatInterface({ cropId, sessionId, onSessionChange }: { 
 
   useEffect(() => {
     endOfMessagesRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages, isLoading]);
+  }, [messages, isLoading, loadingStage]);
+
+  // Stage rotation effect
+  useEffect(() => {
+    if (!isLoading) {
+      setLoadingStage('thinking');
+      return;
+    }
+
+    const stageTimer = setTimeout(() => {
+      setLoadingStage('searching');
+      
+      const secondStageTimer = setTimeout(() => {
+        setLoadingStage('diagnosing');
+      }, 3500); // Switch to diagnosing after 3.5s of searching
+
+      return () => clearTimeout(secondStageTimer);
+    }, 2000); // Switch to searching after 2s of thinking
+
+    return () => clearTimeout(stageTimer);
+  }, [isLoading]);
 
   const fetchMessages = async (id: string) => {
     setIsFetching(true);
@@ -97,7 +120,7 @@ export default function ChatInterface({ cropId, sessionId, onSessionChange }: { 
             <div style={{ display: 'flex', justifyContent: 'center', padding: '3rem' }}><Loader2 className="animate-spin" size={32} color="var(--primary-light)" /></div>
           ) : messages.length === 0 ? (
             <div style={{ textAlign: 'center', padding: '4rem 1rem' }}>
-              <div style={{ width: '64px', height: '64px', backgroundColor: 'white', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 1.5rem auto', border: '2px solid var(--primary-glow)', boxShadow: 'var(--shadow-md)' }}>
+              <div style={{ width: '64px', height: '64px', backgroundColor: 'white', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 2rem auto', border: '2px solid var(--primary-glow)', boxShadow: 'var(--shadow-md)' }}>
                 <ShieldCheck size={32} color="var(--primary-light)" />
               </div>
               <h2 style={{ fontSize: '2.4rem', color: 'var(--primary)', marginBottom: '1rem' }}>{t('helloFarmer')}</h2>
@@ -183,11 +206,28 @@ export default function ChatInterface({ cropId, sessionId, onSessionChange }: { 
             ))
           )}
           {isLoading && (
-            <div style={{ alignSelf: 'flex-start', paddingLeft: '3.5rem' }}>
-              <div style={{ backgroundColor: 'white', padding: '0.75rem 1.5rem', borderRadius: 'var(--radius-md)', display: 'flex', gap: '0.5rem', border: '1px solid var(--border)' }}>
-                <div className="animate-pulse" style={{ width: '8px', height: '8px', backgroundColor: 'var(--primary-light)', borderRadius: '50%' }} />
-                <div className="animate-pulse" style={{ width: '8px', height: '8px', backgroundColor: 'var(--primary)', borderRadius: '50%', animationDelay: '0.2s' }} />
-                <div className="animate-pulse" style={{ width: '8px', height: '8px', backgroundColor: 'var(--primary-light)', borderRadius: '50%', animationDelay: '0.4s' }} />
+            <div style={{ alignSelf: 'flex-start', paddingLeft: '3.5rem' }} className="animate-fade-in">
+              <div style={{ 
+                backgroundColor: 'white', 
+                padding: '0.75rem 1.5rem', 
+                borderRadius: 'var(--radius-md)', 
+                display: 'flex', 
+                alignItems: 'center',
+                gap: '1rem', 
+                border: '1.5px solid var(--primary-glow)',
+                boxShadow: 'var(--shadow-sm)'
+              }}>
+                <div style={{ padding: '0.4rem', backgroundColor: 'var(--bg-hover)', borderRadius: '50%' }}>
+                  <Sprout size={18} color="var(--primary-light)" className="animate-pulse" />
+                </div>
+                <div style={{ display: 'flex', gap: '0.4rem', alignItems: 'center' }}>
+                  <div className="animate-grow" style={{ width: '6px', height: '6px', backgroundColor: 'var(--primary-light)', borderRadius: '50%' }} />
+                  <div className="animate-grow" style={{ width: '6px', height: '6px', backgroundColor: 'var(--primary)', borderRadius: '50%', animationDelay: '0.2s' }} />
+                  <div className="animate-grow" style={{ width: '6px', height: '6px', backgroundColor: 'var(--primary-light)', borderRadius: '50%', animationDelay: '0.4s' }} />
+                </div>
+                <span style={{ fontSize: '0.85rem', color: 'var(--primary)', fontWeight: 600, letterSpacing: '0.02em', minWidth: '150px' }}>
+                  {t(loadingStage)}
+                </span>
               </div>
             </div>
           )}

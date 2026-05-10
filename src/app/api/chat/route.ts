@@ -1,12 +1,6 @@
 import { NextResponse } from 'next/server';
 import { getGeminiModel } from '@/lib/gemini';
-import { GoogleAIFileManager, FileState } from '@google/generative-ai/server';
 import { createClient } from '@/utils/supabase/server';
-import { writeFile, unlink } from 'fs/promises';
-import { join } from 'path';
-import { tmpdir } from 'os';
-
-export const maxDuration = 60; // Allow more time for video processing
 
 export async function POST(req: Request) {
   try {
@@ -22,7 +16,6 @@ export async function POST(req: Request) {
     const cropId = formData.get('cropId') as string;
     let sessionId = formData.get('sessionId') as string;
     
-    // Pre-uploaded media references
     const supabaseUrl = formData.get('supabaseUrl') as string | null;
     const geminiFileUri = formData.get('geminiFileUri') as string | null;
     const mimeType = formData.get('mimeType') as string | null;
@@ -31,244 +24,165 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'Prompt is required' }, { status: 400 });
     }
 
-    // Ensure profile exists and get language
     const { data: profile } = await supabase.from('profiles').select('id, preferred_language').eq('id', user.id).single();
-    if (!profile) {
-       await supabase.from('profiles').insert({ id: user.id });
-    }
+    if (!profile) { await supabase.from('profiles').insert({ id: user.id }); }
     const language = profile?.preferred_language || 'auto';
 
-    // 1. Ensure a session exists
+    // 1. Session & Crop Context
     let cropName = 'Unknown';
     let sowingDate = 'Unknown';
     let sowingLocation = 'Unknown';
+    let lat: number | null = null;
+    let lng: number | null = null;
 
     if (!sessionId || sessionId === 'new') {
-      // Check crop ownership first
-      const { data: cropData, error: cropErr } = await supabase
-        .from('farmer_crops')
-        .select('user_id, name, date_of_sowing, location')
-        .eq('id', cropId)
-        .single();
-        
-      if (cropErr || cropData?.user_id !== user.id) {
-        return NextResponse.json({ error: 'Unauthorized to use this crop' }, { status: 403 });
-      }
-
+      const { data: cropData, error: cropErr } = await supabase.from('farmer_crops').select('user_id, name, date_of_sowing, location, latitude, longitude').eq('id', cropId).single();
+      if (cropErr || cropData?.user_id !== user.id) { return NextResponse.json({ error: 'Unauthorized' }, { status: 403 }); }
       cropName = cropData.name;
       sowingDate = cropData.date_of_sowing || 'Not specified';
       sowingLocation = cropData.location || 'Not specified';
+      lat = cropData.latitude;
+      lng = cropData.longitude;
 
-      // AI-Powered Title Generation (Gemini-style)
-      let sessionTitle = prompt.substring(0, 30); // Quick fallback snippet
+      let sessionTitle = prompt.substring(0, 30);
       try {
-        console.log("Generating AI title for prompt:", prompt.substring(0, 50));
-        // Use a simple model without tools for fast title generation
         const titleModel = getGeminiModel('gemini-2.0-flash'); 
-        const titlePrompt = `Generate a very short, concise, and professional title (max 4 words) for an agricultural chat starting with this prompt: "${prompt}". Respond ONLY with the title.`;
-        const titleResult = await titleModel.generateContent(titlePrompt);
+        const titleResult = await titleModel.generateContent(`Title (max 4 words) for: "${prompt}"`);
         sessionTitle = titleResult.response.text().trim().replace(/["']/g, '');
-        console.log("Generated Title:", sessionTitle);
-      } catch (err) {
-        console.error("AI Title generation failed, using fallback:", err);
-      }
+      } catch (err) {}
 
-      console.log("Creating new chat session for crop:", cropId);
-      const { data: session, error } = await supabase
-        .from('chat_sessions')
-        .insert({ 
-          user_id: user.id, 
-          crop_id: cropId, 
-          title: sessionTitle 
-        })
-        .select()
-        .single();
-      
-      if (error) {
-        console.error("Session creation error:", error);
-        throw new Error('Failed to create chat session.');
-      }
+      const { data: session, error } = await supabase.from('chat_sessions').insert({ user_id: user.id, crop_id: cropId, title: sessionTitle }).select().single();
+      if (error) throw new Error('Session creation failed');
       sessionId = session.id;
-      console.log("New session ID created:", sessionId);
     } else {
-      // Verify session ownership and get crop details
-      const { data: existingSession, error: sessionErr } = await supabase
-        .from('chat_sessions')
-        .select('user_id, crop_id')
-        .eq('id', sessionId)
-        .single();
-      
-      if (sessionErr || existingSession?.user_id !== user.id) {
-        return NextResponse.json({ error: 'Unauthorized to access this session' }, { status: 403 });
-      }
-
-      const { data: cropData } = await supabase
-        .from('farmer_crops')
-        .select('name, date_of_sowing, location')
-        .eq('id', existingSession.crop_id)
-        .single();
-
+      const { data: existingSession, error: sessionErr } = await supabase.from('chat_sessions').select('user_id, crop_id').eq('id', sessionId).single();
+      if (sessionErr || existingSession?.user_id !== user.id) { return NextResponse.json({ error: 'Unauthorized' }, { status: 403 }); }
+      const { data: cropData } = await supabase.from('farmer_crops').select('name, date_of_sowing, location, latitude, longitude').eq('id', existingSession.crop_id).single();
       cropName = cropData?.name || 'Unknown';
       sowingDate = cropData?.date_of_sowing || 'Not specified';
       sowingLocation = cropData?.location || 'Not specified';
+      lat = cropData?.latitude || null;
+      lng = cropData?.longitude || null;
     }
 
-    // 2. Fetch past context for this session
-    const { data: sessionData } = await supabase
-      .from('chat_sessions')
-      .select('summary')
-      .eq('id', sessionId)
-      .single();
+    // Fetch Weather Context (Open-Meteo)
+    let weatherContext = "Weather data unavailable.";
+    if (lat && lng) {
+      try {
+        const weatherRes = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lng}&current=temperature_2m,relative_humidity_2m,precipitation&daily=temperature_2m_max,temperature_2m_min,precipitation_sum&timezone=auto&forecast_days=3`);
+        const weatherData = await weatherRes.json();
+        const current = weatherData.current;
+        const daily = weatherData.daily;
+        
+        weatherContext = `
+CURRENT WEATHER:
+- Temp: ${current.temperature_2m}°C, Humidity: ${current.relative_humidity_2m}%, Rain: ${current.precipitation}mm
 
+3-DAY FORECAST:
+- Tomorrow: ${daily.temperature_2m_min[1]}°C to ${daily.temperature_2m_max[1]}°C, Rain sum: ${daily.precipitation_sum[1]}mm
+- Day 2: ${daily.temperature_2m_min[2]}°C to ${daily.temperature_2m_max[2]}°C, Rain sum: ${daily.precipitation_sum[2]}mm
+`;
+      } catch (weatherErr) {
+        console.error("Weather fetch failed:", weatherErr);
+      }
+    }
+
+    const { data: sessionData } = await supabase.from('chat_sessions').select('summary').eq('id', sessionId).single();
     const summaryText = sessionData?.summary || '';
 
-    const { data: pastMessages } = await supabase
-      .from('chat_messages')
-      .select('role, content')
-      .eq('session_id', sessionId)
-      .order('created_at', { ascending: true });
+    // 2. Build History (Optimization: Use Text Summaries for past Media)
+    const { data: pastMessages } = await supabase.from('chat_messages').select('role, content, metadata').eq('session_id', sessionId).order('created_at', { ascending: true }).limit(20);
 
-    const userMessages = pastMessages?.filter(msg => msg.role === 'user') || [];
-    const messageCount = userMessages.length;
-
-    // Take the last 10 messages (5 pairs) for raw context
-    const last10 = pastMessages ? pastMessages.slice(-10) : [];
-    let chatHistory = last10.map(msg => ({
-      role: msg.role === 'assistant' ? 'model' : 'user',
-      parts: [{ text: msg.content }]
-    }));
-
-    console.log("Constructing Gemini parts. Media present:", !!geminiFileUri);
-    const parts: any[] = [{ text: prompt }];
-    let userImageUrl = supabaseUrl; 
-
-    if (geminiFileUri && mimeType) {
-      parts.push({
-        fileData: {
-          fileUri: geminiFileUri,
-          mimeType: mimeType,
-        },
+    let chatHistory: any[] = [];
+    if (pastMessages) {
+      chatHistory = pastMessages.map(msg => {
+        let textContent = msg.content;
+        if (msg.role === 'user' && msg.metadata?.media_summary) {
+          textContent = `[USER PROMPT]: ${msg.content}\n[IMAGE ANALYSIS]: ${msg.metadata.media_summary}`;
+        }
+        return {
+          role: msg.role === 'assistant' ? 'model' : 'user',
+          parts: [{ text: textContent }]
+        };
       });
     }
 
-    // 4. Generate Content
-    const systemInstruction = `You are AgriBud, an elite, professional AI assistant for farmers in India, specializing in crop disease diagnosis and treatment.
+    // 3. Current Parts (With Media if present)
+    const currentParts: any[] = [{ text: prompt }];
+    if (geminiFileUri && mimeType) {
+      currentParts.push({ fileData: { fileUri: geminiFileUri, mimeType: mimeType } });
+      currentParts[0].text += `\n\nIMPORTANT: Since you are analyzing new media, you MUST provide a detailed technical summary of what you see in the media for my records. Format this analysis as a JSON block at the absolute end of your response: \`\`\`json {"media_summary": "..."} \`\`\``;
+    }
 
-CONTEXT FOR THIS CONVERSATION:
-- CROP NAME: ${cropName}
-- DATE OF SOWING: ${sowingDate}
-- LOCATION: ${sowingLocation}
+    // 4. AI Call
+    const systemInstruction = `You are AgriBud, an elite agricultural AI expert for Indian farmers.
+- CROP: ${cropName} (Sown: ${sowingDate}, Location: ${sowingLocation})
+- LANGUAGE: ${language === 'auto' ? "Match user's prompt exactly" : language}
 
-${language === 'auto' ? 'Respond in the same language as the user\'s prompt.' : `Please reply in this language: ${language}.`}
+LOCAL WEATHER CONTEXT:
+${weatherContext}
 
-CONCISENESS MANDATE:
-- Provide ONLY the direct response to the user's question or media.
-- OMIT all greetings (e.g., "Hello", "Namaste"), pleasantries, and generic disclaimers.
-- OMIT introductory filler (e.g., "I can help you with that", "Based on the image...").
-- START immediately with the diagnosis or the answer.
-- KEEP explanations brief and scientific. Focus on ACTIONABLE advice.
+OUTPUT STRUCTURE (CRITICAL):
+1. **Diagnosis/Analysis**: Brief scientific assessment of symptoms.
+2. **Treatment Plan**: Provide this ONLY as a structured Markdown Table (Chemical, Organic, Dosage, Timing).
+3. **Precautions**: 3-5 concise bullet points for future prevention.
 
-CRITICAL INSTRUCTIONS:
-1. Always format your output using highly structured Markdown.
-2. Use Markdown Tables extensively to present data (e.g., Treatment Plans, Disease Characteristics, Dosages, Timelines).
-3. Use clear Headings (##, ###) and Bullet Points to break down complex agricultural science into digestible, actionable advice.
-4. Provide scientifically grounded, highly accurate agricultural advice. Avoid hallucination.
-${summaryText ? `\nPREVIOUS CONVERSATION SUMMARY:\n${summaryText}` : ''}`;
+CONCISENESS RULES:
+- NO greetings (Hello, Namaste), pleasantries, or introductory filler.
+- NO conversational talk.
+- Provide scientifically grounded, actionable facts only.
+- CONSIDER LOCAL WEATHER: If high rain is forecasted, warn against pesticide spraying. If high heat, suggest irrigation.
 
-    const model = getGeminiModel();
-    const chat = model.startChat({
-      history: [
-        { role: 'user', parts: [{ text: systemInstruction }] },
-        { role: 'model', parts: [{ text: 'Understood. I will follow these instructions.' }] },
-        ...chatHistory
-      ]
-    });
+${summaryText ? `\nCONVERSATION SUMMARY:\n${summaryText}` : ''}`;
 
-    console.log("Sending message to Gemini...");
-    const result = await chat.sendMessage(parts);
-    const responseText = result.response.text();
-    console.log("Gemini responded successfully.");
+    const model = getGeminiModel('gemini-2.5-flash', systemInstruction);
+    const chat = model.startChat({ history: chatHistory });
+    const result = await chat.sendMessage(currentParts);
+    let fullResponse = result.response.text();
 
-    // Extract grounding metadata/citations
+    // 5. Parse and Strip Media Summary
+    let mediaSummary = null;
+    const jsonMatch = fullResponse.match(/```json\s*({[\s\S]*?})\s*```/);
+    if (jsonMatch) {
+      try {
+        const jsonData = JSON.parse(jsonMatch[1]);
+        mediaSummary = jsonData.media_summary;
+        fullResponse = fullResponse.replace(jsonMatch[0], '').trim();
+      } catch (e) {}
+    }
+
+    // 6. Citations
     let citations: any[] = [];
     try {
-      const candidate = (result.response as any).candidates?.[0];
-      const groundingMetadata = candidate?.groundingMetadata;
-      if (groundingMetadata && groundingMetadata.groundingChunks) {
-        citations = groundingMetadata.groundingChunks
-          .filter((chunk: any) => chunk.web)
-          .map((chunk: any) => ({
-            title: chunk.web.title,
-            url: chunk.web.uri
-          }));
-        console.log("Extracted citations:", citations.length);
+      const grounding = (result.response as any).candidates?.[0]?.groundingMetadata;
+      if (grounding?.groundingChunks) {
+        citations = grounding.groundingChunks.filter((c: any) => c.web).map((c: any) => ({ title: c.web.title, url: c.web.uri }));
       }
-    } catch (citeErr) {
-      console.error("Error extracting citations:", citeErr);
-    }
+    } catch (e) {}
 
-    // 5. Save to Database
-    // Insert User Message
+    // 7. Save
     await supabase.from('chat_messages').insert({
-      session_id: sessionId,
-      role: 'user',
-      content: prompt,
-      image_url: userImageUrl
+      session_id: sessionId, role: 'user', content: prompt, image_url: supabaseUrl, 
+      metadata: { media_summary: mediaSummary, mimeType }
     });
 
-    // Insert AI Message
     await supabase.from('chat_messages').insert({
-      session_id: sessionId,
-      role: 'assistant',
-      content: responseText,
+      session_id: sessionId, role: 'assistant', content: fullResponse, 
       metadata: { citations }
     });
 
-    const newCount = messageCount + 1;
-    if (newCount % 5 === 0 && newCount > 0) {
-      const summaryPrompt = `Please provide a concise summary of the following conversation, focusing on the key symptoms discussed, diseases identified, and treatments recommended.
-      
-Previous Summary:
-${summaryText || 'None'}
-
-Recent Messages:
-${chatHistory.map(m => `${m.role}: ${m.parts[0].text}`).join('\n')}
-user: ${prompt}
-model: ${responseText}
-
-Return ONLY the summary.`;
-      
-      try {
-        const summaryModel = getGeminiModel();
-        const summaryResult = await summaryModel.generateContent(summaryPrompt);
-        const newSummary = summaryResult.response.text();
-        
-        await supabase.from('chat_sessions').update({ summary: newSummary }).eq('id', sessionId);
-      } catch (sumErr) {
-        console.error("Failed to generate summary:", sumErr);
-      }
+    // 8. Async Summary
+    if ((pastMessages?.length || 0 + 1) % 4 === 0) {
+      const summaryModel = getGeminiModel('gemini-2.0-flash');
+      summaryModel.generateContent(`Summarize symptoms/treatments: ${fullResponse}`).then(res => {
+        supabase.from('chat_sessions').update({ summary: res.response.text() }).eq('id', sessionId);
+      }).catch(() => {});
     }
 
-    return NextResponse.json({ 
-      response: responseText, 
-      sessionId,
-      metadata: { citations }
-    });
+    return NextResponse.json({ response: fullResponse, sessionId, metadata: { citations } });
 
   } catch (error: any) {
-    console.error('Gemini API Error:', error);
-    
-    // Detect 429 Quota Error
-    if (error.status === 429 || error.message?.includes('429')) {
-      return NextResponse.json(
-        { error: 'AgriBud is currently experiencing high demand. Please try again in a few minutes as we have reached our temporary usage limit.' },
-        { status: 429 }
-      );
-    }
-
-    return NextResponse.json(
-      { error: 'Failed to process request with AI.', details: error.message },
-      { status: 500 }
-    );
+    console.error('Chat Error:', error);
+    return NextResponse.json({ error: 'AI failed.' }, { status: 500 });
   }
 }

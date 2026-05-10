@@ -63,10 +63,19 @@ CREATE TABLE IF NOT EXISTS public.chat_messages (
   session_id UUID REFERENCES public.chat_sessions(id) ON DELETE CASCADE,
   role TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
   content TEXT NOT NULL,
-  image_url TEXT, -- If the user uploaded an image
+  image_url TEXT, -- Supabase Storage URL for frontend
+  gemini_file_uri TEXT, -- Gemini API file reference for AI context
   metadata JSONB, -- For citations, search results, etc.
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
+
+-- Ensure gemini_file_uri exists if table was created in an older version
+DO $$ 
+BEGIN 
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='chat_messages' AND column_name='gemini_file_uri') THEN
+        ALTER TABLE public.chat_messages ADD COLUMN gemini_file_uri TEXT;
+    END IF;
+END $$;
 
 -- Enable Row Level Security (RLS)
 ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY;

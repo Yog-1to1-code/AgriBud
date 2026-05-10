@@ -17,6 +17,7 @@ export default function DashboardPage() {
   const [newCropName, setNewCropName] = useState('');
   const [dateOfSowing, setDateOfSowing] = useState('');
   const [location, setLocation] = useState('');
+  const [coords, setCoords] = useState<{lat: number, lng: number} | null>(null);
   const [isLocating, setIsLocating] = useState(false);
 
   const supabase = createClient();
@@ -55,6 +56,7 @@ export default function DashboardPage() {
       navigator.geolocation.getCurrentPosition(
         async (position) => {
           const { latitude, longitude } = position.coords;
+          setCoords({ lat: latitude, lng: longitude });
           try {
             const response = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${latitude}&lon=${longitude}`);
             const data = await response.json();
@@ -81,6 +83,23 @@ export default function DashboardPage() {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) throw new Error("User not authenticated");
 
+      let finalLat = coords?.lat || null;
+      let finalLng = coords?.lng || null;
+
+      // If user typed a location but didn't use GPS, try to geocode it
+      if (!finalLat && location.trim()) {
+        try {
+          const geoRes = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(location.trim())}&limit=1`);
+          const geoData = await geoRes.json();
+          if (geoData && geoData.length > 0) {
+            finalLat = parseFloat(geoData[0].lat);
+            finalLng = parseFloat(geoData[0].lon);
+          }
+        } catch (geoErr) {
+          console.error("Geocoding failed:", geoErr);
+        }
+      }
+
       const { data: profile, error: profileErr } = await supabase
         .from('profiles')
         .select('id')
@@ -97,7 +116,9 @@ export default function DashboardPage() {
           user_id: user.id, 
           name: newCropName.trim(),
           date_of_sowing: dateOfSowing || null,
-          location: location.trim() || null
+          location: location.trim() || null,
+          latitude: finalLat,
+          longitude: finalLng
         })
         .select()
         .single();
@@ -109,6 +130,7 @@ export default function DashboardPage() {
         setNewCropName('');
         setDateOfSowing('');
         setLocation('');
+        setCoords(null);
         setIsModalOpen(false);
       }
     } catch (err: any) {

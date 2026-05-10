@@ -10,6 +10,9 @@ export const translations = {
     cancel: 'Cancel',
     back: 'Back',
     loading: 'Loading...',
+    thinking: 'Thinking...',
+    searching: 'Searching Databases...',
+    diagnosing: 'Diagnosing...',
     
     // Dashboard
     dashboardTitle: 'Farmer Dashboard',
@@ -65,6 +68,9 @@ export const translations = {
     cancel: 'रद्द करें',
     back: 'पीछे',
     loading: 'लोड हो रहा है...',
+    thinking: 'सोच रहा हूँ...',
+    searching: 'डेटाबेस में खोज रहा हूँ...',
+    diagnosing: 'निदान कर रहा हूँ...',
     
     // Dashboard
     dashboardTitle: 'किसान डैशबोर्ड',
@@ -120,6 +126,9 @@ export const translations = {
     cancel: 'रद्द करा',
     back: 'मागे',
     loading: 'लोड होत आहे...',
+    thinking: 'विचार करत आहे...',
+    searching: 'माहिती शोधत आहे...',
+    diagnosing: 'निदान करत आहे...',
     
     // Dashboard
     dashboardTitle: 'शेतकरी डॅशबोर्ड',
