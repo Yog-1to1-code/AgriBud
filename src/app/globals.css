@@ -1,0 +1,168 @@
+/* Nature-Inspired "Forest & Mint" Theme Reset */
+:root {
+  /* Primary Palette - Based on Presentation.pdf */
+  --bg-deep: #f4f9f6; /* Very light mint */
+  --bg-surface: #ffffff; /* Pure white panels */
+  --bg-hover: #e8f5e9; /* Soft mint hover */
+  
+  --primary: #064e3b; /* Dark Forest Green for headings */
+  --primary-light: #10b981; /* Vibrant Emerald Green for icons/primary actions */
+  --primary-glow: rgba(16, 185, 129, 0.1);
+  
+  --accent: #ff9933; /* Saffron for secondary alerts/actions */
+  --accent-glow: rgba(255, 153, 51, 0.2);
+  
+  --text-main: #1f2937; /* Deep Slate for text */
+  --text-muted: #6b7280; /* Gray for labels */
+  --border: #e2e8f0; /* Light gray for subtle dividers */
+  
+  --radius-sm: 8px;
+  --radius-md: 14px;
+  --radius-lg: 20px;
+  --radius-xl: 32px;
+  
+  --shadow-sm: 0 1px 3px rgba(0,0,0,0.05);
+  --shadow-md: 0 4px 6px -1px rgba(0,0,0,0.05), 0 2px 4px -1px rgba(0,0,0,0.03);
+  --shadow-lg: 0 20px 25px -5px rgba(0,0,0,0.05), 0 10px 10px -5px rgba(0,0,0,0.02);
+
+  --font-sans: 'Outfit', sans-serif;
+  --font-serif: 'Playfair Display', serif;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html, body {
+  height: 100%;
+  width: 100%;
+  font-family: var(--font-sans);
+  background-color: var(--bg-deep);
+  color: var(--text-main);
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+}
+
+/* Typography Overhaul */
+h1, h2, h3 {
+  font-family: var(--font-serif);
+  font-weight: 700;
+  color: var(--primary);
+  line-height: 1.2;
+}
+
+button {
+  cursor: pointer;
+  border: none;
+  background: none;
+  font-family: inherit;
+  color: inherit;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+a {
+  text-decoration: none;
+  color: inherit;
+}
+
+input, select, textarea {
+  font-family: inherit;
+  font-size: 1rem;
+  color: var(--text-main);
+  background: var(--bg-surface);
+  border: 1.5px solid var(--border);
+  border-radius: var(--radius-md);
+  outline: none;
+  padding: 0.6rem 1rem;
+  transition: all 0.2s;
+}
+
+input:focus {
+  border-color: var(--primary-light);
+  box-shadow: 0 0 0 3px var(--primary-glow);
+}
+
+/* Layout Primitives */
+.app-shell {
+  height: 100vh;
+  width: 100vw;
+  display: flex;
+  flex-direction: column;
+}
+
+.main-container {
+  flex: 1;
+  display: flex;
+  overflow: hidden;
+}
+
+.content-scroll {
+  flex: 1;
+  overflow-y: auto;
+  padding: 1.25rem;
+}
+
+/* Updated Utility Classes - Less Glass, More Paper */
+.glass {
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-md);
+}
+
+.btn-primary {
+  background: var(--primary);
+  color: white;
+  padding: 0.6rem 1.25rem;
+  border-radius: 9999px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  transition: all 0.3s;
+}
+
+.btn-primary:hover {
+  background: var(--primary-light);
+  transform: translateY(-2px);
+  box-shadow: 0 8px 16px rgba(16, 185, 129, 0.2);
+}
+
+.input-field {
+  width: 100%;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.animate-spin {
+  animation: spin 1s linear infinite;
+}
+
+/* Animations */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(15px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.animate-fade-in {
+  animation: fadeIn 0.6s cubic-bezier(0.2, 0.8, 0.2, 1) forwards;
+}
+
+/* Pro-Agricultural Prose Styling */
+.prose {
+  line-height: 1.6;
+  font-size: 1rem;
+  color: #374151;
+}
+.prose p { margin-bottom: 0.75rem; }
+.prose h1, .prose h2, .prose h3 { margin-top: 1.25rem; margin-bottom: 0.5rem; }
+.prose ul, .prose ol { margin-bottom: 1rem; padding-left: 1.25rem; }
+.prose li { margin-bottom: 0.25rem; }
+.prose table { width: 100%; border-collapse: collapse; margin: 1rem 0; border: 1px solid var(--border); border-radius: var(--radius-md); overflow: hidden; }
+.prose th, .prose td { padding: 0.6rem 0.75rem; border: 1px solid var(--border); text-align: left; }
+.prose th { background: var(--bg-hover); color: var(--primary); font-weight: 700; }
