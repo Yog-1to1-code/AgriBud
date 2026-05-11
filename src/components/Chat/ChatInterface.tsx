@@ -6,7 +6,7 @@ import remarkGfm from 'remark-gfm';
 import PromptBar from './PromptBar';
 import { useLanguage } from '@/contexts/LanguageContext';
 
-type LoadingStage = 'thinking' | 'searching' | 'diagnosing';
+type LoadingStage = 'thinking' | 'searching' | 'grounding' | 'elaborating' | 'iterating' | 'finalizing';
 
 export default function ChatInterface({ cropId, sessionId, onSessionChange }: { cropId: string, sessionId: string, onSessionChange: (id: string) => void }) {
   const { t } = useLanguage();
@@ -15,22 +15,10 @@ export default function ChatInterface({ cropId, sessionId, onSessionChange }: { 
   const [loadingStage, setLoadingStage] = useState<LoadingStage>('thinking');
   const [isFetching, setIsFetching] = useState(false);
   const endOfMessagesRef = useRef<HTMLDivElement>(null);
-  const prevSessionIdRef = useRef<string>(sessionId);
 
   useEffect(() => {
-    const prevSessionId = prevSessionIdRef.current;
-    prevSessionIdRef.current = sessionId;
-
-    if (sessionId && sessionId !== 'new') {
-      if (prevSessionId !== 'new' && prevSessionId !== sessionId) {
-        setMessages([]);
-        fetchMessages(sessionId);
-      } 
-      else if (messages.length === 0) {
-        fetchMessages(sessionId);
-      }
-    } else if (sessionId === 'new') {
-      setMessages([]);
+    if (sessionId !== 'new' && messages.length === 0) {
+      fetchMessages(sessionId);
     }
   }, [sessionId]);
 
@@ -45,17 +33,17 @@ export default function ChatInterface({ cropId, sessionId, onSessionChange }: { 
       return;
     }
 
-    const stageTimer = setTimeout(() => {
-      setLoadingStage('searching');
-      
-      const secondStageTimer = setTimeout(() => {
-        setLoadingStage('diagnosing');
-      }, 3500); // Switch to diagnosing after 3.5s of searching
+    const stages: LoadingStage[] = ['thinking', 'searching', 'grounding', 'elaborating', 'iterating', 'finalizing'];
+    let stageIndex = 0;
+    
+    const interval = setInterval(() => {
+      stageIndex++;
+      if (stageIndex < stages.length) {
+        setLoadingStage(stages[stageIndex]);
+      }
+    }, 1200);
 
-      return () => clearTimeout(secondStageTimer);
-    }, 2000); // Switch to searching after 2s of thinking
-
-    return () => clearTimeout(stageTimer);
+    return () => clearInterval(interval);
   }, [isLoading]);
 
   const fetchMessages = async (id: string) => {

@@ -8,6 +8,12 @@ export default function CropChatPage() {
   const params = useParams();
   const cropId = params.id as string;
   const [currentSessionId, setCurrentSessionId] = useState<string>('new');
+  const [sessionKey, setSessionKey] = useState(0);
+
+  const handleSelectSession = (id: string) => {
+    setSessionKey(prev => prev + 1);
+    setCurrentSessionId(id);
+  };
 
   return (
     <div className="app-shell">
@@ -15,10 +21,11 @@ export default function CropChatPage() {
         <Sidebar 
           cropId={cropId}
           currentSessionId={currentSessionId} 
-          onSelectSession={(id) => setCurrentSessionId(id)} 
+          onSelectSession={handleSelectSession} 
         />
         <main style={{ flex: 1, backgroundColor: 'var(--bg-deep)', position: 'relative' }}>
           <ChatInterface 
+            key={`chat-${sessionKey}`}
             cropId={cropId}
             sessionId={currentSessionId}
             onSessionChange={(id) => setCurrentSessionId(id)}

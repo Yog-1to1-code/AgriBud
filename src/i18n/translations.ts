@@ -11,8 +11,11 @@ export const translations = {
     back: 'Back',
     loading: 'Loading...',
     thinking: 'Thinking...',
-    searching: 'Searching Databases...',
-    diagnosing: 'Diagnosing...',
+    searching: 'Searching...',
+    grounding: 'Grounding...',
+    elaborating: 'Elaborating...',
+    iterating: 'Iterating...',
+    finalizing: 'Finalizing...',
     
     // Dashboard
     dashboardTitle: 'Farmer Dashboard',
@@ -69,8 +72,11 @@ export const translations = {
     back: 'पीछे',
     loading: 'लोड हो रहा है...',
     thinking: 'सोच रहा हूँ...',
-    searching: 'डेटाबेस में खोज रहा हूँ...',
-    diagnosing: 'निदान कर रहा हूँ...',
+    searching: 'खोज रहा हूँ...',
+    grounding: 'सत्यापन कर रहा हूँ...',
+    elaborating: 'विस्तार कर रहा हूँ...',
+    iterating: 'दोहरा रहा हूँ...',
+    finalizing: 'अंतिम रूप दे रहा हूँ...',
     
     // Dashboard
     dashboardTitle: 'किसान डैशबोर्ड',
@@ -127,8 +133,11 @@ export const translations = {
     back: 'मागे',
     loading: 'लोड होत आहे...',
     thinking: 'विचार करत आहे...',
-    searching: 'माहिती शोधत आहे...',
-    diagnosing: 'निदान करत आहे...',
+    searching: 'शोधत आहे...',
+    grounding: 'पडताळणी करत आहे...',
+    elaborating: 'विस्तार करत आहे...',
+    iterating: 'पुनरावृत्ती करत आहे...',
+    finalizing: 'अंतिम रूप देत आहे...',
     
     // Dashboard
     dashboardTitle: 'शेतकरी डॅशबोर्ड',

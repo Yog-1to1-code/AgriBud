@@ -15,7 +15,7 @@ export async function POST(req: Request) {
     const prompt = formData.get('prompt') as string;
     const cropId = formData.get('cropId') as string;
     let sessionId = formData.get('sessionId') as string;
-    
+
     const supabaseUrl = formData.get('supabaseUrl') as string | null;
     const geminiFileUri = formData.get('geminiFileUri') as string | null;
     const mimeType = formData.get('mimeType') as string | null;
@@ -46,10 +46,10 @@ export async function POST(req: Request) {
 
       let sessionTitle = prompt.substring(0, 30);
       try {
-        const titleModel = getGeminiModel('gemini-2.0-flash'); 
+        const titleModel = getGeminiModel('gemini-2.5-pro');
         const titleResult = await titleModel.generateContent(`Title (max 4 words) for: "${prompt}"`);
         sessionTitle = titleResult.response.text().trim().replace(/["']/g, '');
-      } catch (err) {}
+      } catch (err) { }
 
       const { data: session, error } = await supabase.from('chat_sessions').insert({ user_id: user.id, crop_id: cropId, title: sessionTitle }).select().single();
       if (error) throw new Error('Session creation failed');
@@ -73,7 +73,7 @@ export async function POST(req: Request) {
         const weatherData = await weatherRes.json();
         const current = weatherData.current;
         const daily = weatherData.daily;
-        
+
         weatherContext = `
 CURRENT WEATHER:
 - Temp: ${current.temperature_2m}°C, Humidity: ${current.relative_humidity_2m}%, Rain: ${current.precipitation}mm
@@ -135,7 +135,7 @@ CONCISENESS RULES:
 
 ${summaryText ? `\nCONVERSATION SUMMARY:\n${summaryText}` : ''}`;
 
-    const model = getGeminiModel('gemini-2.5-flash', systemInstruction);
+    const model = getGeminiModel('gemini-2.5-pro', systemInstruction);
     const chat = model.startChat({ history: chatHistory });
     const result = await chat.sendMessage(currentParts);
     let fullResponse = result.response.text();
@@ -148,7 +148,7 @@ ${summaryText ? `\nCONVERSATION SUMMARY:\n${summaryText}` : ''}`;
         const jsonData = JSON.parse(jsonMatch[1]);
         mediaSummary = jsonData.media_summary;
         fullResponse = fullResponse.replace(jsonMatch[0], '').trim();
-      } catch (e) {}
+      } catch (e) { }
     }
 
     // 6. Citations
@@ -158,25 +158,25 @@ ${summaryText ? `\nCONVERSATION SUMMARY:\n${summaryText}` : ''}`;
       if (grounding?.groundingChunks) {
         citations = grounding.groundingChunks.filter((c: any) => c.web).map((c: any) => ({ title: c.web.title, url: c.web.uri }));
       }
-    } catch (e) {}
+    } catch (e) { }
 
     // 7. Save
     await supabase.from('chat_messages').insert({
-      session_id: sessionId, role: 'user', content: prompt, image_url: supabaseUrl, 
+      session_id: sessionId, role: 'user', content: prompt, image_url: supabaseUrl,
       metadata: { media_summary: mediaSummary, mimeType }
     });
 
     await supabase.from('chat_messages').insert({
-      session_id: sessionId, role: 'assistant', content: fullResponse, 
+      session_id: sessionId, role: 'assistant', content: fullResponse,
       metadata: { citations }
     });
 
     // 8. Async Summary
     if ((pastMessages?.length || 0 + 1) % 4 === 0) {
-      const summaryModel = getGeminiModel('gemini-2.0-flash');
+      const summaryModel = getGeminiModel('gemini-2.5-pro');
       summaryModel.generateContent(`Summarize symptoms/treatments: ${fullResponse}`).then(res => {
         supabase.from('chat_sessions').update({ summary: res.response.text() }).eq('id', sessionId);
-      }).catch(() => {});
+      }).catch(() => { });
     }
 
     return NextResponse.json({ response: fullResponse, sessionId, metadata: { citations } });
