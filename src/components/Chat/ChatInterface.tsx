@@ -1,6 +1,6 @@
 "use client";
 import React, { useState, useRef, useEffect } from 'react';
-import { Loader2, ExternalLink, Globe, User, ShieldCheck, Sprout } from 'lucide-react';
+import { Loader2, ExternalLink, Globe, User, ShieldCheck, Sprout, Menu } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import PromptBar from './PromptBar';
@@ -8,7 +8,7 @@ import { useLanguage } from '@/contexts/LanguageContext';
 
 type LoadingStage = 'thinking' | 'searching' | 'grounding' | 'elaborating' | 'iterating' | 'finalizing';
 
-export default function ChatInterface({ cropId, sessionId, onSessionChange }: { cropId: string, sessionId: string, onSessionChange: (id: string) => void }) {
+export default function ChatInterface({ cropId, sessionId, onSessionChange, onToggleSidebar }: { cropId: string, sessionId: string, onSessionChange: (id: string) => void, onToggleSidebar?: () => void }) {
   const { t } = useLanguage();
   const [messages, setMessages] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -101,6 +101,17 @@ export default function ChatInterface({ cropId, sessionId, onSessionChange }: { 
 
   return (
     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', height: '100%', backgroundColor: 'var(--bg-deep)' }}>
+      
+      {/* Mobile Header (Only visible on small screens) */}
+      <div className="mobile-block mobile-hidden" style={{ padding: '1rem', backgroundColor: 'var(--bg-surface)', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: '1rem' }}>
+        {onToggleSidebar && (
+          <button onClick={onToggleSidebar} style={{ padding: '0.4rem', color: 'var(--primary)', borderRadius: 'var(--radius-sm)' }}>
+            <Menu size={24} />
+          </button>
+        )}
+        <h2 style={{ fontSize: '1.2rem', color: 'var(--primary)', fontWeight: 600 }}>{t('appName')} Diagnosis</h2>
+      </div>
+
       {/* Scrollable Area */}
       <div style={{ flex: 1, overflowY: 'auto', padding: '1rem' }}>
         <div style={{ maxWidth: '900px', margin: '0 auto', display: 'flex', flexDirection: 'column', gap: '1.5rem', paddingBottom: '2rem' }}>
@@ -159,8 +170,19 @@ export default function ChatInterface({ cropId, sessionId, onSessionChange }: { 
                         <img src={msg.image_url} alt="Crop Upload" style={{ maxWidth: '100%', maxHeight: '400px', display: 'block' }} />
                       </div>
                     )}
-                    <div className="prose">
-                      <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown>
+                    <div className="prose" style={{ maxWidth: '100%', overflow: 'hidden' }}>
+                      <ReactMarkdown 
+                        remarkPlugins={[remarkGfm]}
+                        components={{
+                          table: ({node, ...props}) => (
+                            <div className="table-wrapper">
+                              <table {...props} />
+                            </div>
+                          )
+                        }}
+                      >
+                        {msg.content}
+                      </ReactMarkdown>
                     </div>
                   </div>
                 </div>
