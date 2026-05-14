@@ -5,11 +5,13 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import PromptBar from './PromptBar';
 import { useLanguage } from '@/contexts/LanguageContext';
+import { useDemo } from '@/contexts/DemoContext';
 
 type LoadingStage = 'thinking' | 'searching' | 'grounding' | 'elaborating' | 'iterating' | 'finalizing';
 
 export default function ChatInterface({ cropId, sessionId, onSessionChange, onToggleSidebar }: { cropId: string, sessionId: string, onSessionChange: (id: string) => void, onToggleSidebar?: () => void }) {
   const { t } = useLanguage();
+  const { isDemoMode, demoMessages, addDemoMessage, addDemoSession, getDemoAIResponse } = useDemo();
   const [messages, setMessages] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [loadingStage, setLoadingStage] = useState<LoadingStage>('thinking');
@@ -17,10 +19,19 @@ export default function ChatInterface({ cropId, sessionId, onSessionChange, onTo
   const endOfMessagesRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
+    if (isDemoMode) {
+      if (sessionId !== 'new') {
+        setMessages(demoMessages[sessionId] || []);
+      } else {
+        setMessages([]);
+      }
+      return;
+    }
+
     if (sessionId !== 'new' && messages.length === 0) {
       fetchMessages(sessionId);
     }
-  }, [sessionId]);
+  }, [sessionId, isDemoMode, demoMessages]);
 
   useEffect(() => {
     endOfMessagesRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -71,6 +82,39 @@ export default function ChatInterface({ cropId, sessionId, onSessionChange, onTo
     setMessages(prev => [...prev, userMsg]);
     setIsLoading(true);
 
+    if (isDemoMode) {
+      // In demo mode, simulate a delayed AI response
+      let currentSessionId = sessionId;
+      
+      if (sessionId === 'new') {
+        const title = input.substring(0, 30) + (input.length > 30 ? '...' : '');
+        const newSession = addDemoSession(cropId, title);
+        currentSessionId = newSession.id;
+        onSessionChange(currentSessionId);
+        // Add user message to demo store
+        addDemoMessage(currentSessionId, userMsg);
+      } else {
+        addDemoMessage(currentSessionId, userMsg);
+      }
+
+      // Simulate AI thinking delay
+      await new Promise(resolve => setTimeout(resolve, 2500));
+      
+      const aiResponse = getDemoAIResponse();
+      const assistantMsg = { 
+        role: 'assistant', 
+        content: aiResponse.response, 
+        id: (Date.now() + 1).toString(), 
+        metadata: { citations: aiResponse.citations } 
+      };
+      
+      setMessages(prev => [...prev, assistantMsg]);
+      addDemoMessage(currentSessionId, assistantMsg);
+      setIsLoading(false);
+      return;
+    }
+
+    // Real API call
     try {
       const formData = new FormData();
       formData.append('prompt', input);
@@ -100,30 +144,38 @@ export default function ChatInterface({ cropId, sessionId, onSessionChange, onTo
   };
 
   return (
-    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', height: '100%', backgroundColor: 'var(--bg-deep)' }}>
+    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', height: '100%', backgroundColor: 'var(--bg-deep)', minHeight: 0 }}>
       
-      {/* Mobile Header (Only visible on small screens) */}
-      <div className="mobile-block mobile-hidden" style={{ padding: '1rem', backgroundColor: 'var(--bg-surface)', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: '1rem' }}>
+      {/* Mobile Header — Always visible on mobile via CSS */}
+      <div style={{ 
+        padding: '0.6rem 0.75rem', 
+        backgroundColor: 'var(--bg-surface)', 
+        borderBottom: '1px solid var(--border)', 
+        display: 'none', /* Hidden by default (desktop) */
+        alignItems: 'center', 
+        gap: '0.75rem',
+        flexShrink: 0,
+      }} className="mobile-chat-header">
         {onToggleSidebar && (
-          <button onClick={onToggleSidebar} style={{ padding: '0.4rem', color: 'var(--primary)', borderRadius: 'var(--radius-sm)' }}>
-            <Menu size={24} />
+          <button onClick={onToggleSidebar} style={{ padding: '0.35rem', color: 'var(--primary)', borderRadius: 'var(--radius-sm)' }}>
+            <Menu size={22} />
           </button>
         )}
-        <h2 style={{ fontSize: '1.2rem', color: 'var(--primary)', fontWeight: 600 }}>{t('appName')} Diagnosis</h2>
+        <h2 style={{ fontSize: '1.05rem', color: 'var(--primary)', fontWeight: 600 }}>{t('appName')} Diagnosis</h2>
       </div>
 
-      {/* Scrollable Area */}
-      <div style={{ flex: 1, overflowY: 'auto', padding: '1rem' }}>
-        <div style={{ maxWidth: '900px', margin: '0 auto', display: 'flex', flexDirection: 'column', gap: '1.5rem', paddingBottom: '2rem' }}>
+      {/* Scrollable Messages Area */}
+      <div style={{ flex: 1, overflowY: 'auto', padding: 'clamp(0.5rem, 2vw, 1rem)', minHeight: 0, WebkitOverflowScrolling: 'touch' }}>
+        <div style={{ maxWidth: '900px', margin: '0 auto', display: 'flex', flexDirection: 'column', gap: '1.25rem', paddingBottom: '1.5rem' }}>
           {isFetching ? (
-            <div style={{ display: 'flex', justifyContent: 'center', padding: '3rem' }}><Loader2 className="animate-spin" size={32} color="var(--primary-light)" /></div>
+            <div style={{ display: 'flex', justifyContent: 'center', padding: '3rem' }}><Loader2 className="animate-spin" size={30} color="var(--primary-light)" /></div>
           ) : messages.length === 0 ? (
-            <div style={{ textAlign: 'center', padding: '4rem 1rem' }}>
-              <div style={{ width: '64px', height: '64px', backgroundColor: 'white', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 2rem auto', border: '2px solid var(--primary-glow)', boxShadow: 'var(--shadow-md)' }}>
-                <ShieldCheck size={32} color="var(--primary-light)" />
+            <div style={{ textAlign: 'center', padding: 'clamp(2rem, 5vw, 4rem) 1rem' }}>
+              <div style={{ width: '56px', height: '56px', backgroundColor: 'white', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 1.5rem auto', border: '2px solid var(--primary-glow)', boxShadow: 'var(--shadow-md)' }}>
+                <ShieldCheck size={28} color="var(--primary-light)" />
               </div>
-              <h2 style={{ fontSize: '2.4rem', color: 'var(--primary)', marginBottom: '1rem' }}>{t('helloFarmer')}</h2>
-              <p style={{ color: 'var(--text-muted)', fontSize: '1.1rem', maxWidth: '500px', margin: '0 auto', lineHeight: 1.5 }}>
+              <h2 style={{ fontSize: 'clamp(1.5rem, 4vw, 2.2rem)', color: 'var(--primary)', marginBottom: '0.75rem' }}>{t('helloFarmer')}</h2>
+              <p style={{ color: 'var(--text-muted)', fontSize: 'clamp(0.9rem, 2vw, 1.05rem)', maxWidth: '440px', margin: '0 auto', lineHeight: 1.5 }}>
                 {t('chatSub')}
               </p>
             </div>
@@ -132,18 +184,19 @@ export default function ChatInterface({ cropId, sessionId, onSessionChange, onTo
               <div key={msg.id || i} style={{ 
                 alignSelf: 'stretch',
                 display: 'flex',
-                gap: '1rem',
+                gap: '0.75rem',
                 flexDirection: 'column'
               }}>
                 <div style={{
                   display: 'flex',
-                  gap: '1rem',
+                  gap: 'clamp(0.5rem, 2vw, 1rem)',
                   alignItems: 'flex-start',
                   flexDirection: msg.role === 'user' ? 'row-reverse' : 'row'
                 }}>
+                  {/* Avatar */}
                   <div style={{ 
-                    width: '36px', 
-                    height: '36px', 
+                    width: '32px', 
+                    height: '32px', 
                     borderRadius: '50%', 
                     backgroundColor: msg.role === 'user' ? 'var(--primary-light)' : 'var(--primary)', 
                     display: 'flex', 
@@ -153,21 +206,25 @@ export default function ChatInterface({ cropId, sessionId, onSessionChange, onTo
                     flexShrink: 0,
                     boxShadow: 'var(--shadow-sm)'
                   }}>
-                    {msg.role === 'user' ? <User size={18} /> : <ShieldCheck size={18} />}
+                    {msg.role === 'user' ? <User size={16} /> : <ShieldCheck size={16} />}
                   </div>
 
+                  {/* Message Bubble */}
                   <div style={{
                     flex: 1,
                     backgroundColor: 'var(--bg-surface)',
-                    padding: '1.25rem 1.5rem',
+                    padding: 'clamp(0.75rem, 2vw, 1.25rem)',
                     borderRadius: 'var(--radius-md)',
                     boxShadow: 'var(--shadow-sm)',
                     border: '1px solid var(--border)',
-                    position: 'relative'
+                    position: 'relative',
+                    minWidth: 0,
+                    maxWidth: '100%',
+                    overflow: 'hidden',
                   }}>
                     {msg.image_url && (
-                      <div style={{ marginBottom: '1rem', borderRadius: 'var(--radius-sm)', overflow: 'hidden', border: '1px solid var(--border)', display: 'inline-block' }}>
-                        <img src={msg.image_url} alt="Crop Upload" style={{ maxWidth: '100%', maxHeight: '400px', display: 'block' }} />
+                      <div style={{ marginBottom: '0.75rem', borderRadius: 'var(--radius-sm)', overflow: 'hidden', border: '1px solid var(--border)', display: 'inline-block', maxWidth: '100%' }}>
+                        <img src={msg.image_url} alt="Crop Upload" style={{ maxWidth: '100%', maxHeight: '300px', display: 'block' }} />
                       </div>
                     )}
                     <div className="prose" style={{ maxWidth: '100%', overflow: 'hidden' }}>
@@ -187,27 +244,27 @@ export default function ChatInterface({ cropId, sessionId, onSessionChange, onTo
                   </div>
                 </div>
 
-                {msg.role === 'assistant' && msg.metadata?.citations && (
-                  <div style={{ paddingLeft: '3.5rem', display: 'flex', flexWrap: 'wrap', gap: '0.6rem' }}>
+                {/* Citations */}
+                {msg.role === 'assistant' && msg.metadata?.citations && msg.metadata.citations.length > 0 && (
+                  <div style={{ paddingLeft: 'clamp(2.5rem, 5vw, 3rem)', display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
                     {msg.metadata.citations.map((cite: any, idx: number) => (
                       <a key={idx} href={cite.url} target="_blank" rel="noreferrer" 
                         style={{ 
-                          padding: '0.4rem 0.75rem', 
+                          padding: '0.35rem 0.6rem', 
                           borderRadius: 'var(--radius-sm)', 
-                          fontSize: '0.75rem', 
+                          fontSize: '0.7rem', 
                           display: 'flex', 
                           alignItems: 'center', 
-                          gap: '0.5rem', 
+                          gap: '0.4rem', 
                           color: 'var(--primary-light)',
                           backgroundColor: 'white',
                           border: '1px solid var(--border)',
                           fontWeight: 600,
-                          transition: 'all 0.2s'
+                          transition: 'all 0.2s',
+                          whiteSpace: 'nowrap',
                         }}
-                        onMouseOver={(e) => { e.currentTarget.style.borderColor = 'var(--primary-light)'; e.currentTarget.style.boxShadow = 'var(--shadow-sm)'; }}
-                        onMouseOut={(e) => { e.currentTarget.style.borderColor = 'var(--border)'; e.currentTarget.style.boxShadow = 'none'; }}
                       >
-                        <Globe size={12} /> {cite.title || 'Official Source'} <ExternalLink size={10} />
+                        <Globe size={10} /> {cite.title || 'Source'} <ExternalLink size={9} />
                       </a>
                     ))}
                   </div>
@@ -215,27 +272,29 @@ export default function ChatInterface({ cropId, sessionId, onSessionChange, onTo
               </div>
             ))
           )}
+
+          {/* Loading Indicator */}
           {isLoading && (
-            <div style={{ alignSelf: 'flex-start', paddingLeft: '3.5rem' }} className="animate-fade-in">
+            <div style={{ alignSelf: 'flex-start', paddingLeft: 'clamp(2.5rem, 5vw, 3rem)' }} className="animate-fade-in">
               <div style={{ 
                 backgroundColor: 'white', 
-                padding: '0.75rem 1.5rem', 
+                padding: '0.6rem 1.25rem', 
                 borderRadius: 'var(--radius-md)', 
                 display: 'flex', 
                 alignItems: 'center',
-                gap: '1rem', 
+                gap: '0.75rem', 
                 border: '1.5px solid var(--primary-glow)',
                 boxShadow: 'var(--shadow-sm)'
               }}>
-                <div style={{ padding: '0.4rem', backgroundColor: 'var(--bg-hover)', borderRadius: '50%' }}>
-                  <Sprout size={18} color="var(--primary-light)" className="animate-pulse" />
+                <div style={{ padding: '0.3rem', backgroundColor: 'var(--bg-hover)', borderRadius: '50%' }}>
+                  <Sprout size={16} color="var(--primary-light)" className="animate-pulse" />
                 </div>
-                <div style={{ display: 'flex', gap: '0.4rem', alignItems: 'center' }}>
-                  <div className="animate-grow" style={{ width: '6px', height: '6px', backgroundColor: 'var(--primary-light)', borderRadius: '50%' }} />
-                  <div className="animate-grow" style={{ width: '6px', height: '6px', backgroundColor: 'var(--primary)', borderRadius: '50%', animationDelay: '0.2s' }} />
-                  <div className="animate-grow" style={{ width: '6px', height: '6px', backgroundColor: 'var(--primary-light)', borderRadius: '50%', animationDelay: '0.4s' }} />
+                <div style={{ display: 'flex', gap: '0.3rem', alignItems: 'center' }}>
+                  <div className="animate-grow" style={{ width: '5px', height: '5px', backgroundColor: 'var(--primary-light)', borderRadius: '50%' }} />
+                  <div className="animate-grow" style={{ width: '5px', height: '5px', backgroundColor: 'var(--primary)', borderRadius: '50%', animationDelay: '0.2s' }} />
+                  <div className="animate-grow" style={{ width: '5px', height: '5px', backgroundColor: 'var(--primary-light)', borderRadius: '50%', animationDelay: '0.4s' }} />
                 </div>
-                <span style={{ fontSize: '0.85rem', color: 'var(--primary)', fontWeight: 600, letterSpacing: '0.02em', minWidth: '150px' }}>
+                <span style={{ fontSize: '0.8rem', color: 'var(--primary)', fontWeight: 600, letterSpacing: '0.02em', minWidth: '120px' }}>
                   {t(loadingStage)}
                 </span>
               </div>
@@ -246,11 +305,19 @@ export default function ChatInterface({ cropId, sessionId, onSessionChange, onTo
       </div>
 
       {/* Input Area */}
-      <div style={{ backgroundColor: 'var(--bg-surface)', borderTop: '1.5px solid var(--border)', padding: '0.25rem 0' }}>
+      <div style={{ backgroundColor: 'var(--bg-surface)', borderTop: '1.5px solid var(--border)', flexShrink: 0 }}>
         <div style={{ maxWidth: '950px', margin: '0 auto', width: '100%' }}>
           <PromptBar onSendMessage={sendMessage} isLoading={isLoading} />
         </div>
       </div>
+
+      <style jsx>{`
+        @media (max-width: 768px) {
+          .mobile-chat-header {
+            display: flex !important;
+          }
+        }
+      `}</style>
     </div>
   );
 }

@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Outfit, Playfair_Display, Inter } from "next/font/google";
 import "./globals.css";
 import { Providers } from "./Providers";
@@ -10,6 +10,14 @@ const inter = Inter({ subsets: ["latin"], variable: "--font-inter" });
 export const metadata: Metadata = {
   title: "AgriBud - AI Crop Disease Diagnosis",
   description: "Multilingual AI assistant for farmers to diagnose crop diseases and get treatment plans.",
+};
+
+export const viewport: Viewport = {
+  width: 'device-width',
+  initialScale: 1,
+  maximumScale: 1,
+  userScalable: false,
+  viewportFit: 'cover',
 };
 
 export default function RootLayout({

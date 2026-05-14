@@ -4,9 +4,11 @@ import { Plus, MessageSquare, Loader2, ChevronLeft, History, Trash2, Edit2, Chec
 import { createClient } from '@/utils/supabase/client';
 import { useRouter } from 'next/navigation';
 import { useLanguage } from '@/contexts/LanguageContext';
+import { useDemo } from '@/contexts/DemoContext';
 
 export default function Sidebar({ cropId, onSelectSession, currentSessionId }: { cropId: string, onSelectSession: (id: string) => void, currentSessionId: string | null }) {
   const { t } = useLanguage();
+  const { isDemoMode, demoSessions, getCropName, addDemoSession, deleteDemoSession, renameDemoSession } = useDemo();
   const [sessions, setSessions] = useState<any[]>([]);
   const [cropName, setCropName] = useState('Crop');
   const [loading, setLoading] = useState(true);
@@ -19,9 +21,15 @@ export default function Sidebar({ cropId, onSelectSession, currentSessionId }: {
   const menuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    fetchCropDetails();
-    fetchSessions();
-  }, [currentSessionId, cropId]);
+    if (isDemoMode) {
+      setCropName(getCropName(cropId));
+      setSessions(demoSessions[cropId] || []);
+      setLoading(false);
+    } else {
+      fetchCropDetails();
+      fetchSessions();
+    }
+  }, [currentSessionId, cropId, isDemoMode, demoSessions]);
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -76,6 +84,13 @@ export default function Sidebar({ cropId, onSelectSession, currentSessionId }: {
     e.stopPropagation();
     setMenuOpenId(null);
     if (!confirm(t('deleteChatConfirm'))) return;
+
+    if (isDemoMode) {
+      deleteDemoSession(id, cropId);
+      if (currentSessionId === id) onSelectSession('new');
+      return;
+    }
+
     try {
       const { error } = await supabase.from('chat_sessions').delete().eq('id', id);
       if (error) throw error;
@@ -98,6 +113,13 @@ export default function Sidebar({ cropId, onSelectSession, currentSessionId }: {
     e.preventDefault();
     e.stopPropagation();
     if (!newTitle.trim()) return;
+
+    if (isDemoMode) {
+      renameDemoSession(id, cropId, newTitle.trim());
+      setEditingSessionId(null);
+      return;
+    }
+
     try {
       const { error } = await supabase.from('chat_sessions').update({ title: newTitle.trim() }).eq('id', id);
       if (error) throw error;
@@ -111,56 +133,58 @@ export default function Sidebar({ cropId, onSelectSession, currentSessionId }: {
   return (
     <div style={{ 
       width: '280px', 
+      maxWidth: '85vw',
       height: '100%', 
       display: 'flex', 
       flexDirection: 'column', 
       backgroundColor: 'var(--bg-surface)', 
-      borderRight: '1.5px solid var(--border)' 
+      borderRight: '1.5px solid var(--border)',
+      overflow: 'hidden',
     }}>
       {/* Header */}
-      <div style={{ padding: '1.25rem 1rem', borderBottom: '1.5px solid var(--border)' }}>
+      <div style={{ padding: '1rem 0.75rem', borderBottom: '1.5px solid var(--border)', flexShrink: 0 }}>
         <button 
           onClick={() => router.push('/dashboard')} 
-          style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--primary-light)', fontSize: '0.8rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '1rem' }}
+          style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', color: 'var(--primary-light)', fontSize: '0.75rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.75rem' }}
         >
           <ChevronLeft size={14} /> {t('backToHub')}
         </button>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
-          <div style={{ padding: '0.4rem', backgroundColor: 'var(--bg-hover)', borderRadius: 'var(--radius-sm)' }}>
-            <Sprout size={18} color="var(--primary-light)" />
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+          <div style={{ padding: '0.35rem', backgroundColor: 'var(--bg-hover)', borderRadius: 'var(--radius-sm)', flexShrink: 0 }}>
+            <Sprout size={16} color="var(--primary-light)" />
           </div>
-          <h2 style={{ fontSize: '1.1rem', color: 'var(--primary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{cropName}</h2>
+          <h2 style={{ fontSize: '1rem', color: 'var(--primary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{cropName}</h2>
         </div>
       </div>
 
-      {/* Primary Action */}
-      <div style={{ padding: '1rem' }}>
+      {/* New Diagnosis Button */}
+      <div style={{ padding: '0.75rem' }}>
         <button 
           onClick={() => onSelectSession('new')}
           className="btn-primary"
           style={{ 
             width: '100%', 
-            padding: '0.75rem', 
+            padding: '0.65rem', 
             borderRadius: 'var(--radius-md)', 
-            fontSize: '0.95rem'
+            fontSize: '0.9rem'
           }}
         >
-          <Plus size={18} /> {t('newDiagnosis')}
+          <Plus size={16} /> {t('newDiagnosis')}
         </button>
       </div>
 
-      {/* List */}
-      <div style={{ flex: 1, overflowY: 'auto', padding: '0.25rem 0.75rem' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', padding: '0.5rem', color: 'var(--text-muted)', fontSize: '0.7rem', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.1em' }}>
-          <History size={12} /> {t('historyTitle')}
+      {/* Session List */}
+      <div style={{ flex: 1, overflowY: 'auto', padding: '0.25rem 0.5rem', minHeight: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', padding: '0.4rem', color: 'var(--text-muted)', fontSize: '0.65rem', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.1em' }}>
+          <History size={11} /> {t('historyTitle')}
         </div>
         
         {loading ? (
-          <div style={{ display: 'flex', justifyContent: 'center', padding: '1.5rem' }}><Loader2 className="animate-spin" size={20} color="var(--primary-light)" /></div>
+          <div style={{ display: 'flex', justifyContent: 'center', padding: '1.25rem' }}><Loader2 className="animate-spin" size={18} color="var(--primary-light)" /></div>
         ) : sessions.length === 0 ? (
-          <p style={{ padding: '1.5rem', color: 'var(--text-muted)', fontSize: '0.8rem', textAlign: 'center', fontStyle: 'italic' }}>{t('noRecords')}</p>
+          <p style={{ padding: '1.25rem', color: 'var(--text-muted)', fontSize: '0.78rem', textAlign: 'center', fontStyle: 'italic' }}>{t('noRecords')}</p>
         ) : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.15rem' }}>
             {sessions.map(s => (
               <div key={s.id} style={{ 
                 position: 'relative', 
@@ -171,15 +195,15 @@ export default function Sidebar({ cropId, onSelectSession, currentSessionId }: {
                 transition: 'all 0.2s'
               }}>
                 {editingSessionId === s.id ? (
-                  <form onSubmit={(e) => handleRename(s.id, e)} style={{ flex: 1, display: 'flex', alignItems: 'center', gap: '0.4rem', padding: '0.4rem' }}>
+                  <form onSubmit={(e) => handleRename(s.id, e)} style={{ flex: 1, display: 'flex', alignItems: 'center', gap: '0.3rem', padding: '0.3rem' }}>
                     <input 
                       autoFocus
-                      style={{ flex: 1, padding: '0.3rem', fontSize: '0.8rem', border: '1px solid var(--primary-light)' }}
+                      style={{ flex: 1, padding: '0.25rem 0.4rem', fontSize: '0.78rem', border: '1px solid var(--primary-light)', minWidth: 0 }}
                       value={newTitle}
                       onChange={(e) => setNewTitle(e.target.value)}
                       onBlur={() => setEditingSessionId(null)}
                     />
-                    <button type="submit" onMouseDown={(e) => handleRename(s.id, e)} style={{ color: 'var(--primary-light)' }}><Check size={14} /></button>
+                    <button type="submit" onMouseDown={(e) => handleRename(s.id, e)} style={{ color: 'var(--primary-light)', flexShrink: 0 }}><Check size={14} /></button>
                   </form>
                 ) : (
                   <>
@@ -187,23 +211,24 @@ export default function Sidebar({ cropId, onSelectSession, currentSessionId }: {
                       onClick={() => onSelectSession(s.id)}
                       style={{
                         flex: 1,
-                        padding: '0.6rem 0.75rem',
+                        padding: '0.5rem 0.6rem',
                         textAlign: 'left',
                         display: 'flex',
                         alignItems: 'center',
-                        gap: '0.6rem',
-                        fontSize: '0.85rem',
+                        gap: '0.5rem',
+                        fontSize: '0.82rem',
                         color: s.id === currentSessionId ? 'var(--primary)' : 'var(--text-main)',
-                        fontWeight: s.id === currentSessionId ? 700 : 500
+                        fontWeight: s.id === currentSessionId ? 700 : 500,
+                        minWidth: 0,
                       }}
                     >
-                      <MessageSquare size={14} style={{ color: s.id === currentSessionId ? 'var(--primary-light)' : 'var(--text-muted)' }} />
-                      <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{s.title}</span>
+                      <MessageSquare size={13} style={{ flexShrink: 0, color: s.id === currentSessionId ? 'var(--primary-light)' : 'var(--text-muted)' }} />
+                      <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', flex: 1 }}>{s.title}</span>
                     </button>
                     
                     <button 
                       onClick={(e) => { e.stopPropagation(); setMenuOpenId(menuOpenId === s.id ? null : s.id); }}
-                      style={{ padding: '0.4rem', color: 'var(--text-muted)' }}
+                      style={{ padding: '0.35rem', color: 'var(--text-muted)', flexShrink: 0 }}
                     >
                       <MoreVertical size={14} />
                     </button>
@@ -211,11 +236,11 @@ export default function Sidebar({ cropId, onSelectSession, currentSessionId }: {
                     {menuOpenId === s.id && (
                       <div ref={menuRef} style={{ 
                         position: 'absolute', top: '90%', right: '0.5rem', zIndex: 100, backgroundColor: 'white',
-                        padding: '0.25rem', borderRadius: 'var(--radius-md)', minWidth: '120px',
+                        padding: '0.25rem', borderRadius: 'var(--radius-md)', minWidth: '110px',
                         boxShadow: '0 8px 24px -4px rgba(0,0,0,0.1)', border: '1.5px solid var(--border)'
                       }}>
-                        <button onClick={(e) => handleStartRename(s, e)} style={{ width: '100%', textAlign: 'left', padding: '0.5rem 0.75rem', fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: '0.5rem', borderRadius: 'var(--radius-sm)' }} onMouseOver={(e) => e.currentTarget.style.backgroundColor = 'var(--bg-hover)'} onMouseOut={(e) => e.currentTarget.style.backgroundColor = 'transparent'}><Edit2 size={12} /> {t('rename')}</button>
-                        <button onClick={(e) => handleDeleteSession(s.id, e)} style={{ width: '100%', textAlign: 'left', padding: '0.5rem 0.75rem', fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: '0.5rem', color: '#ef4444', borderRadius: 'var(--radius-sm)' }} onMouseOver={(e) => e.currentTarget.style.backgroundColor = '#fee2e2'} onMouseOut={(e) => e.currentTarget.style.backgroundColor = 'transparent'}><Trash2 size={12} /> {t('delete')}</button>
+                        <button onClick={(e) => handleStartRename(s, e)} style={{ width: '100%', textAlign: 'left', padding: '0.45rem 0.6rem', fontSize: '0.78rem', display: 'flex', alignItems: 'center', gap: '0.4rem', borderRadius: 'var(--radius-sm)' }} onMouseOver={(e) => e.currentTarget.style.backgroundColor = 'var(--bg-hover)'} onMouseOut={(e) => e.currentTarget.style.backgroundColor = 'transparent'}><Edit2 size={12} /> {t('rename')}</button>
+                        <button onClick={(e) => handleDeleteSession(s.id, e)} style={{ width: '100%', textAlign: 'left', padding: '0.45rem 0.6rem', fontSize: '0.78rem', display: 'flex', alignItems: 'center', gap: '0.4rem', color: '#ef4444', borderRadius: 'var(--radius-sm)' }} onMouseOver={(e) => e.currentTarget.style.backgroundColor = '#fee2e2'} onMouseOut={(e) => e.currentTarget.style.backgroundColor = 'transparent'}><Trash2 size={12} /> {t('delete')}</button>
                       </div>
                     )}
                   </>

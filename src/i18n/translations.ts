@@ -43,7 +43,7 @@ export const translations = {
     // Chat
     helloFarmer: 'Hello, Farmer!',
     chatSub: 'Upload a photo or describe the symptoms. Our AI expert is ready to help.',
-    askAnything: 'Describe symptoms or ask a question...',
+    askAnything: 'Ask Anything to Buddy...',
     preparingMedia: 'Preparing media context...',
     mediaReady: 'Media ready for diagnosis',
     uploadFailed: 'Upload failed',

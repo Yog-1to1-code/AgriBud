@@ -1,20 +1,36 @@
-/* Nature-Inspired "Forest & Mint" Theme Reset */
+/* ═══════════════════════════════════════════════════════════
+   AgriBud — Nature-Inspired "Forest & Mint" Design System
+   Mobile-First Responsive CSS
+   ═══════════════════════════════════════════════════════════ */
+
+/* Hide Next.js Dev Overlay & Static Indicator for presentation */
+nextjs-portal, 
+#nextjs-portal, 
+.__next-prerender-indicator,
+[data-nextjs-toast],
+[data-nextjs-dialog-overlay] {
+  display: none !important;
+  visibility: hidden !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+}
+
 :root {
-  /* Primary Palette - Based on Presentation.pdf */
-  --bg-deep: #f4f9f6; /* Very light mint */
-  --bg-surface: #ffffff; /* Pure white panels */
-  --bg-hover: #e8f5e9; /* Soft mint hover */
+  /* Primary Palette */
+  --bg-deep: #f4f9f6;
+  --bg-surface: #ffffff;
+  --bg-hover: #e8f5e9;
   
-  --primary: #064e3b; /* Dark Forest Green for headings */
-  --primary-light: #10b981; /* Vibrant Emerald Green for icons/primary actions */
+  --primary: #064e3b;
+  --primary-light: #10b981;
   --primary-glow: rgba(16, 185, 129, 0.1);
   
-  --accent: #ff9933; /* Saffron for secondary alerts/actions */
+  --accent: #ff9933;
   --accent-glow: rgba(255, 153, 51, 0.2);
   
-  --text-main: #1f2937; /* Deep Slate for text */
-  --text-muted: #6b7280; /* Gray for labels */
-  --border: #e2e8f0; /* Light gray for subtle dividers */
+  --text-main: #1f2937;
+  --text-muted: #6b7280;
+  --border: #e2e8f0;
   
   --radius-sm: 8px;
   --radius-md: 14px;
@@ -27,25 +43,39 @@
 
   --font-sans: 'Outfit', sans-serif;
   --font-serif: 'Playfair Display', serif;
+  
+  /* Safe area insets for notched phones */
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-left: env(safe-area-inset-left, 0px);
+  --safe-right: env(safe-area-inset-right, 0px);
 }
 
 * {
   box-sizing: border-box;
   margin: 0;
   padding: 0;
+  -webkit-tap-highlight-color: transparent;
 }
 
-html, body {
+html {
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
+}
+
+body {
   height: 100%;
   width: 100%;
   font-family: var(--font-sans);
   background-color: var(--bg-deep);
   color: var(--text-main);
   -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
   overflow: hidden;
 }
 
-/* Typography Overhaul */
+/* ─── Typography ──────────────────────────────────────────── */
 h1, h2, h3 {
   font-family: var(--font-serif);
   font-weight: 700;
@@ -60,11 +90,14 @@ button {
   font-family: inherit;
   color: inherit;
   transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
 }
 
 a {
   text-decoration: none;
   color: inherit;
+  -webkit-tap-highlight-color: transparent;
 }
 
 input, select, textarea {
@@ -77,34 +110,40 @@ input, select, textarea {
   outline: none;
   padding: 0.6rem 1rem;
   transition: all 0.2s;
+  /* Prevent iOS zoom on focus */
+  font-size: max(16px, 1rem);
 }
 
-input:focus {
+input:focus, textarea:focus, select:focus {
   border-color: var(--primary-light);
   box-shadow: 0 0 0 3px var(--primary-glow);
 }
 
-/* Layout Primitives */
+/* ─── Layout Primitives ───────────────────────────────────── */
 .app-shell {
-  height: 100vh;
+  height: 100dvh; /* dynamic viewport height for mobile */
   width: 100vw;
   display: flex;
   flex-direction: column;
+  overflow: hidden;
 }
 
 .main-container {
   flex: 1;
   display: flex;
   overflow: hidden;
+  min-height: 0; /* Fix flexbox overflow */
 }
 
 .content-scroll {
   flex: 1;
   overflow-y: auto;
+  overflow-x: hidden;
   padding: 1.25rem;
+  -webkit-overflow-scrolling: touch;
 }
 
-/* Updated Utility Classes - Less Glass, More Paper */
+/* ─── Utility Classes ─────────────────────────────────────── */
 .glass {
   background: var(--bg-surface);
   border: 1px solid var(--border);
@@ -122,6 +161,7 @@ input:focus {
   justify-content: center;
   gap: 0.5rem;
   transition: all 0.3s;
+  white-space: nowrap;
 }
 
 .btn-primary:hover {
@@ -130,10 +170,42 @@ input:focus {
   box-shadow: 0 8px 16px rgba(16, 185, 129, 0.2);
 }
 
+.btn-primary:active {
+  transform: translateY(0);
+  box-shadow: none;
+}
+
+.btn-primary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
+}
+
 .input-field {
   width: 100%;
 }
 
+/* ─── Demo Mode Badge ─────────────────────────────────────── */
+.demo-badge {
+  position: fixed;
+  top: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  background: linear-gradient(135deg, #ff9933 0%, #ff6b35 100%);
+  color: white;
+  padding: 0.3rem 1.2rem;
+  border-radius: 0 0 var(--radius-md) var(--radius-md);
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  z-index: 9999;
+  box-shadow: 0 4px 12px rgba(255, 107, 53, 0.3);
+  pointer-events: none;
+}
+
+/* ─── Animations ──────────────────────────────────────────── */
 @keyframes spin {
   from { transform: rotate(0deg); }
   to { transform: rotate(360deg); }
@@ -152,7 +224,6 @@ input:focus {
   animation: growShrink 1.2s ease-in-out infinite;
 }
 
-/* Animations */
 @keyframes fadeIn {
   from { opacity: 0; transform: translateY(15px); }
   to { opacity: 1; transform: translateY(0); }
@@ -162,16 +233,45 @@ input:focus {
   animation: fadeIn 0.6s cubic-bezier(0.2, 0.8, 0.2, 1) forwards;
 }
 
-/* Pro-Agricultural Prose Styling */
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+.animate-pulse {
+  animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+@keyframes slideUp {
+  from { opacity: 0; transform: translateY(20px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.animate-slide-up {
+  animation: slideUp 0.4s cubic-bezier(0.2, 0.8, 0.2, 1) forwards;
+}
+
+/* ─── Prose / Markdown Styling ────────────────────────────── */
 .prose {
   line-height: 1.6;
   font-size: 1rem;
   color: #374151;
+  overflow-wrap: break-word;
+  word-wrap: break-word;
+  word-break: break-word;
 }
 .prose p { margin-bottom: 0.75rem; }
 .prose h1, .prose h2, .prose h3 { margin-top: 1.25rem; margin-bottom: 0.5rem; }
 .prose ul, .prose ol { margin-bottom: 1rem; padding-left: 1.25rem; }
 .prose li { margin-bottom: 0.25rem; }
+.prose strong { color: var(--primary); }
+.prose code {
+  background: var(--bg-hover);
+  padding: 0.15rem 0.4rem;
+  border-radius: 4px;
+  font-size: 0.9em;
+}
+
 .table-wrapper {
   width: 100%;
   overflow-x: auto;
@@ -182,34 +282,77 @@ input:focus {
   background: var(--bg-surface);
 }
 
-.prose table { width: 100%; border-collapse: collapse; margin: 0; min-width: 500px; }
-.prose th, .prose td { padding: 0.6rem 0.75rem; border: 1px solid var(--border); text-align: left; }
+.prose table { width: max-content; min-width: 100%; border-collapse: collapse; margin: 0; }
+.prose th, .prose td { padding: 0.5rem 0.75rem; border: 1px solid var(--border); text-align: left; font-size: 0.9rem; white-space: nowrap; }
 .prose th { background: var(--bg-hover); color: var(--primary); font-weight: 700; }
+/* Allow only the last column (Timing/Details) to wrap text since it has longer sentences */
+.prose td:last-child { white-space: normal; min-width: 180px; }
 
-/* Responsive Utilities */
+/* ═══════════════════════════════════════════════════════════
+   RESPONSIVE BREAKPOINTS
+   ═══════════════════════════════════════════════════════════ */
+
+/* ─── Tablet (≤ 1024px) ───────────────────────────────────── */
+@media (max-width: 1024px) {
+  .tablet-hidden { display: none !important; }
+}
+
+/* ─── Mobile (≤ 768px) ────────────────────────────────────── */
 @media (max-width: 768px) {
   /* Layout */
   .mobile-col { flex-direction: column !important; }
   .mobile-col-reverse { flex-direction: column-reverse !important; }
   
   /* Spacing & Padding */
-  .mobile-p-1 { padding: 1rem !important; }
-  .mobile-p-1-5 { padding: 1.5rem !important; }
-  .mobile-p-2 { padding: 2rem !important; }
-  .mobile-py-2 { padding-top: 2rem !important; padding-bottom: 2rem !important; }
+  .mobile-p-1 { padding: 0.75rem !important; }
+  .mobile-p-1-5 { padding: 1.25rem !important; }
+  .mobile-p-2 { padding: 1.5rem !important; }
+  .mobile-py-2 { padding-top: 1.5rem !important; padding-bottom: 1.5rem !important; }
   
   /* Typography */
   .mobile-text-center { text-align: center !important; }
-  .mobile-h1 { font-size: 2.5rem !important; }
-  .mobile-h2 { font-size: 2rem !important; }
+  .mobile-h1 { font-size: 1.8rem !important; line-height: 1.2 !important; }
+  .mobile-h2 { font-size: 1.4rem !important; }
   
   /* Display */
   .mobile-hidden { display: none !important; }
+  .mobile-flex { display: flex !important; }
   .mobile-block { display: block !important; }
   
   /* Grid */
-  .mobile-grid-1 { grid-template-columns: 1fr !important; gap: 1.5rem !important; }
+  .mobile-grid-1 { grid-template-columns: 1fr !important; gap: 1rem !important; }
   
   /* Width */
   .mobile-w-full { width: 100% !important; border-right: none !important; }
+  
+  /* Fix the body scroll */
+  .app-shell {
+    height: 100dvh;
+    height: -webkit-fill-available;
+  }
+  
+  /* Prose tables on mobile — keep text readable, let wrapper scroll */
+  .prose th, .prose td {
+    padding: 0.4rem 0.6rem;
+    font-size: 0.82rem;
+  }
+  
+  /* Ensure no horizontal overflow */
+  .content-scroll {
+    padding: 0.75rem;
+  }
+}
+
+/* ─── Small phones (≤ 390px) ──────────────────────────────── */
+@media (max-width: 390px) {
+  .mobile-h1 { font-size: 1.5rem !important; }
+  .mobile-h2 { font-size: 1.2rem !important; }
+  
+  .mobile-p-1 { padding: 0.5rem !important; }
+  .mobile-p-1-5 { padding: 0.75rem !important; }
+  
+  .btn-primary {
+    padding: 0.5rem 1rem;
+    font-size: 0.9rem;
+  }
 }

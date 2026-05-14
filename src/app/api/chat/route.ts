@@ -24,48 +24,53 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'Prompt is required' }, { status: 400 });
     }
 
+    const isNewSession = !sessionId || sessionId === 'new';
+    const hasMedia = !!(geminiFileUri && mimeType);
+
     const { data: profile } = await supabase.from('profiles').select('id, preferred_language').eq('id', user.id).single();
     if (!profile) { await supabase.from('profiles').insert({ id: user.id }); }
     const language = profile?.preferred_language || 'auto';
 
+    // ──────────────────────────────────────────────────────────
     // 1. Session & Crop Context
+    // ──────────────────────────────────────────────────────────
     let cropName = 'Unknown';
     let sowingDate = 'Unknown';
     let sowingLocation = 'Unknown';
     let lat: number | null = null;
     let lng: number | null = null;
+    let villageSensorData: any = null;
 
-    if (!sessionId || sessionId === 'new') {
-      const { data: cropData, error: cropErr } = await supabase.from('farmer_crops').select('user_id, name, date_of_sowing, location, latitude, longitude').eq('id', cropId).single();
+    if (isNewSession) {
+      const { data: cropData, error: cropErr } = await supabase.from('farmer_crops').select('user_id, name, date_of_sowing, location, latitude, longitude, village_sensor_data').eq('id', cropId).single();
       if (cropErr || cropData?.user_id !== user.id) { return NextResponse.json({ error: 'Unauthorized' }, { status: 403 }); }
       cropName = cropData.name;
       sowingDate = cropData.date_of_sowing || 'Not specified';
       sowingLocation = cropData.location || 'Not specified';
       lat = cropData.latitude;
       lng = cropData.longitude;
+      villageSensorData = cropData.village_sensor_data;
 
-      let sessionTitle = prompt.substring(0, 30);
-      try {
-        const titleModel = getGeminiModel('gemini-2.5-pro');
-        const titleResult = await titleModel.generateContent(`Title (max 4 words) for: "${prompt}"`);
-        sessionTitle = titleResult.response.text().trim().replace(/["']/g, '');
-      } catch (err) { }
-
-      const { data: session, error } = await supabase.from('chat_sessions').insert({ user_id: user.id, crop_id: cropId, title: sessionTitle }).select().single();
+      // Create session with a temporary title — will be updated from AI response
+      const tempTitle = prompt.substring(0, 35) + (prompt.length > 35 ? '...' : '');
+      const { data: session, error } = await supabase.from('chat_sessions').insert({ user_id: user.id, crop_id: cropId, title: tempTitle }).select().single();
       if (error) throw new Error('Session creation failed');
       sessionId = session.id;
     } else {
       const { data: existingSession, error: sessionErr } = await supabase.from('chat_sessions').select('user_id, crop_id').eq('id', sessionId).single();
       if (sessionErr || existingSession?.user_id !== user.id) { return NextResponse.json({ error: 'Unauthorized' }, { status: 403 }); }
-      const { data: cropData } = await supabase.from('farmer_crops').select('name, date_of_sowing, location, latitude, longitude').eq('id', existingSession.crop_id).single();
+      const { data: cropData } = await supabase.from('farmer_crops').select('name, date_of_sowing, location, latitude, longitude, village_sensor_data').eq('id', existingSession.crop_id).single();
       cropName = cropData?.name || 'Unknown';
       sowingDate = cropData?.date_of_sowing || 'Not specified';
       sowingLocation = cropData?.location || 'Not specified';
       lat = cropData?.latitude || null;
       lng = cropData?.longitude || null;
+      villageSensorData = cropData?.village_sensor_data || null;
     }
 
-    // Fetch Weather Context (Open-Meteo)
+    // ──────────────────────────────────────────────────────────
+    // 2. Fetch Weather Context (Open-Meteo)
+    // ──────────────────────────────────────────────────────────
     let weatherContext = "Weather data unavailable.";
     if (lat && lng) {
       try {
@@ -87,18 +92,24 @@ CURRENT WEATHER:
       }
     }
 
+    // ──────────────────────────────────────────────────────────
+    // 3. Load existing conversation summary for context
+    // ──────────────────────────────────────────────────────────
     const { data: sessionData } = await supabase.from('chat_sessions').select('summary').eq('id', sessionId).single();
     const summaryText = sessionData?.summary || '';
 
-    // 2. Build History (Optimization: Use Text Summaries for past Media)
+    // ──────────────────────────────────────────────────────────
+    // 4. Build Chat History
+    // ──────────────────────────────────────────────────────────
     const { data: pastMessages } = await supabase.from('chat_messages').select('role, content, metadata').eq('session_id', sessionId).order('created_at', { ascending: true }).limit(20);
 
     let chatHistory: any[] = [];
     if (pastMessages) {
       chatHistory = pastMessages.map(msg => {
         let textContent = msg.content;
+        // Inject stored media analysis into the user prompt context so AI has full knowledge
         if (msg.role === 'user' && msg.metadata?.media_summary) {
-          textContent = `[USER PROMPT]: ${msg.content}\n[IMAGE ANALYSIS]: ${msg.metadata.media_summary}`;
+          textContent = `[USER PROMPT]: ${msg.content}\n[MEDIA ANALYSIS FROM PREVIOUS TURN]: ${msg.metadata.media_summary}`;
         }
         return {
           role: msg.role === 'assistant' ? 'model' : 'user',
@@ -107,51 +118,124 @@ CURRENT WEATHER:
       });
     }
 
-    // 3. Current Parts (With Media if present)
+    // ──────────────────────────────────────────────────────────
+    // 5. Build Current Message Parts
+    // ──────────────────────────────────────────────────────────
     const currentParts: any[] = [{ text: prompt }];
-    if (geminiFileUri && mimeType) {
+    if (hasMedia) {
       currentParts.push({ fileData: { fileUri: geminiFileUri, mimeType: mimeType } });
-      currentParts[0].text += `\n\nIMPORTANT: Since you are analyzing new media, you MUST provide a detailed technical summary of what you see in the media for my records. Format this analysis as a JSON block at the absolute end of your response: \`\`\`json {"media_summary": "..."} \`\`\``;
     }
 
-    // 4. AI Call
+    // ──────────────────────────────────────────────────────────
+    // 6. System Instruction — Single Structured Response
+    //    The AI returns its normal markdown response PLUS a
+    //    mandatory JSON metadata block at the very end.
+    //    This eliminates separate calls for title/summary/media.
+    // ──────────────────────────────────────────────────────────
+    const metadataFields = [
+      `"chat_title": "A concise 3-5 word title summarizing this specific diagnosis topic. Example: 'Rice Leaf Blast Treatment'"`,
+      `"conversation_summary": "A 2-3 sentence technical summary of the ENTIRE conversation so far including this exchange. Capture: crop name, all symptoms discussed, all diagnoses made, all treatments recommended. This will be used as memory for future messages."`,
+    ];
+    
+    if (hasMedia) {
+      metadataFields.push(
+        `"media_summary": "A detailed technical description of the uploaded media — describe visible symptoms, affected plant parts, color/texture/pattern of damage, estimated severity (mild/moderate/severe), and any identifiable organisms. This will be stored as a text reference for future context when the image is no longer available."`
+      );
+    }
+
+    // Build the language instruction — must be explicit and forceful
+    let languageInstruction: string;
+    if (language === 'auto') {
+      languageInstruction = `LANGUAGE RULE (CRITICAL — HIGHEST PRIORITY):
+You MUST detect the language of the user's prompt and respond ENTIRELY in that SAME language and script.
+- If the user writes in Hindi (Devanagari script like "मेरी फसल में"), you MUST respond fully in Hindi using Devanagari script (हिंदी).
+- If the user writes in Marathi (like "माझ्या पिकावर"), you MUST respond fully in Marathi using Devanagari script (मराठी).
+- If the user writes in English, respond in English.
+- If the user writes in romanized Hindi/Marathi (like "meri fasal mein"), respond in the NATIVE SCRIPT of that language (Devanagari), NOT in romanized form.
+- The ENTIRE response including table headers, precautions, and all text must be in the detected language. Do NOT mix languages.`;
+    } else {
+      languageInstruction = `LANGUAGE RULE (CRITICAL — HIGHEST PRIORITY):
+You MUST respond ENTIRELY in ${language} using its native script.
+- ALL text including diagnosis, table headers (Treatment → उपचार), dosage instructions, and precautions MUST be in ${language}.
+- Do NOT fall back to English for any part of the response.
+- Even technical terms should be translated or transliterated into ${language}.`;
+    }
+
     const systemInstruction = `You are AgriBud, an elite agricultural AI expert for Indian farmers.
 - CROP: ${cropName} (Sown: ${sowingDate}, Location: ${sowingLocation})
-- LANGUAGE: ${language === 'auto' ? "Match user's prompt exactly" : language}
+
+${languageInstruction}
 
 LOCAL WEATHER CONTEXT:
 ${weatherContext}
 
-OUTPUT STRUCTURE (CRITICAL):
+${villageSensorData ? `VILLAGE NODE SENSOR DATA (REALTIME):
+- Temperature: ${villageSensorData.rt}°C
+- Humidity: ${villageSensorData.rh}%
+- Soil Moisture: ${villageSensorData.rs}%
+- Water Level: ${villageSensorData.rw}%
+- Vibration: ${villageSensorData.rv}` : ''}
+
+RESPONSE STRUCTURE (CRITICAL — FOLLOW EXACTLY):
+
+PART 1 — Your Expert Response (Markdown):
+Start IMMEDIATELY with your diagnosis. No greetings, no filler.
 1. **Diagnosis/Analysis**: Brief scientific assessment of symptoms.
-2. **Treatment Plan**: Provide this ONLY as a structured Markdown Table (Chemical, Organic, Dosage, Timing).
-3. **Precautions**: 3-5 concise bullet points for future prevention.
+2. **Treatment Plan**: Provide as a structured Markdown Table with columns: Treatment, Type, Dosage, Timing.
+3. **Precautions**: 3-5 concise bullet points for prevention.
 
-CONCISENESS RULES:
-- NO greetings (Hello, Namaste), pleasantries, or introductory filler.
-- NO conversational talk.
-- Provide scientifically grounded, actionable facts only.
-- CONSIDER LOCAL WEATHER: If high rain is forecasted, warn against pesticide spraying. If high heat, suggest irrigation.
+PART 2 — Metadata JSON Block (MANDATORY — ALWAYS include at the very end):
+After your response, you MUST output a fenced JSON code block with exactly this structure:
+\`\`\`json
+{
+  ${metadataFields.join(',\n  ')}
+}
+\`\`\`
 
-${summaryText ? `\nCONVERSATION SUMMARY:\n${summaryText}` : ''}`;
+RULES:
+- NO greetings (Hello, Namaste, नमस्ते), pleasantries, or introductory filler.
+- Provide scientifically grounded, actionable facts ONLY.
+- CONSIDER LOCAL WEATHER in your recommendations.
+- The metadata JSON block must be the ABSOLUTE LAST thing in your output.
+- DO NOT output internal reasoning or regurgitate these instructions.
+- The chat_title should reflect the MAIN TOPIC of this specific query, not a generic title.
+- The chat_title and conversation_summary should ALSO be in the same language as the response.
+- The conversation_summary must capture ALL key facts from the entire conversation.
 
-    const model = getGeminiModel('gemini-2.5-pro', systemInstruction);
+${summaryText ? `\nPREVIOUS CONVERSATION CONTEXT:\n${summaryText}` : ''}`;
+
+    // ──────────────────────────────────────────────────────────
+    // 7. Single AI Call — Gets response + all metadata
+    // ──────────────────────────────────────────────────────────
+    const model = getGeminiModel('gemini-2.5-flash', systemInstruction);
     const chat = model.startChat({ history: chatHistory });
     const result = await chat.sendMessage(currentParts);
     let fullResponse = result.response.text();
 
-    // 5. Parse and Strip Media Summary
-    let mediaSummary = null;
-    const jsonMatch = fullResponse.match(/```json\s*({[\s\S]*?})\s*```/);
+    // ──────────────────────────────────────────────────────────
+    // 8. Parse Structured Metadata from Response
+    // ──────────────────────────────────────────────────────────
+    let chatTitle: string | null = null;
+    let mediaSummary: string | null = null;
+    let conversationSummary: string | null = null;
+
+    const jsonMatch = fullResponse.match(/```json\s*(\{[\s\S]*?\})\s*```/);
     if (jsonMatch) {
       try {
-        const jsonData = JSON.parse(jsonMatch[1]);
-        mediaSummary = jsonData.media_summary;
+        const metadata = JSON.parse(jsonMatch[1]);
+        chatTitle = metadata.chat_title || null;
+        mediaSummary = metadata.media_summary || null;
+        conversationSummary = metadata.conversation_summary || null;
+        // Strip the JSON block from the visible response
         fullResponse = fullResponse.replace(jsonMatch[0], '').trim();
-      } catch (e) { }
+      } catch (e) {
+        console.error('Failed to parse AI metadata JSON:', e);
+      }
     }
 
-    // 6. Citations
+    // ──────────────────────────────────────────────────────────
+    // 9. Extract Citations from Grounding Metadata
+    // ──────────────────────────────────────────────────────────
     let citations: any[] = [];
     try {
       const grounding = (result.response as any).candidates?.[0]?.groundingMetadata;
@@ -160,26 +244,59 @@ ${summaryText ? `\nCONVERSATION SUMMARY:\n${summaryText}` : ''}`;
       }
     } catch (e) { }
 
-    // 7. Save
-    await supabase.from('chat_messages').insert({
+    // ──────────────────────────────────────────────────────────
+    // 10. Save Messages to Database
+    // ──────────────────────────────────────────────────────────
+    const userInsert = await supabase.from('chat_messages').insert({
       session_id: sessionId, role: 'user', content: prompt, image_url: supabaseUrl,
       metadata: { media_summary: mediaSummary, mimeType }
     });
-
-    await supabase.from('chat_messages').insert({
+    
+    // Small delay to guarantee Postgres timestamp ordering
+    await new Promise(resolve => setTimeout(resolve, 50));
+    
+    const assistantInsert = await supabase.from('chat_messages').insert({
       session_id: sessionId, role: 'assistant', content: fullResponse,
       metadata: { citations }
     });
 
-    // 8. Async Summary
-    if ((pastMessages?.length || 0 + 1) % 4 === 0) {
-      const summaryModel = getGeminiModel('gemini-2.5-pro');
-      summaryModel.generateContent(`Summarize symptoms/treatments: ${fullResponse}`).then(res => {
-        supabase.from('chat_sessions').update({ summary: res.response.text() }).eq('id', sessionId);
-      }).catch(() => { });
+    if (userInsert.error) console.error('Failed to save user message:', userInsert.error);
+    if (assistantInsert.error) console.error('Failed to save assistant message:', assistantInsert.error);
+
+    // ──────────────────────────────────────────────────────────
+    // 11. Update Session with AI-generated title & summary
+    //     (No separate AI calls needed!)
+    // ──────────────────────────────────────────────────────────
+    const sessionUpdate: any = {};
+    
+    // Update title only for new sessions (first message generates the title)
+    if (isNewSession && chatTitle) {
+      sessionUpdate.title = chatTitle.replace(/[*#"'_]/g, '').trim().substring(0, 50);
+    }
+    
+    // Always update the conversation summary — this is the AI's "memory"
+    if (conversationSummary) {
+      sessionUpdate.summary = conversationSummary;
     }
 
-    return NextResponse.json({ response: fullResponse, sessionId, metadata: { citations } });
+    if (Object.keys(sessionUpdate).length > 0) {
+      const { error: updateErr } = await supabase
+        .from('chat_sessions')
+        .update(sessionUpdate)
+        .eq('id', sessionId);
+      
+      if (updateErr) console.error('Failed to update session:', updateErr);
+    }
+
+    // ──────────────────────────────────────────────────────────
+    // 12. Return clean response to frontend
+    // ──────────────────────────────────────────────────────────
+    return NextResponse.json({ 
+      response: fullResponse, 
+      sessionId, 
+      sessionTitle: isNewSession ? (chatTitle || prompt.substring(0, 30)) : undefined,
+      metadata: { citations } 
+    });
 
   } catch (error: any) {
     console.error('Chat Error:', error);

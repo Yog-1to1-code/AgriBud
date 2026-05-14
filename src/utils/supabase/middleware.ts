@@ -34,16 +34,32 @@ export async function updateSession(request: NextRequest) {
     data: { user },
   } = await supabase.auth.getUser()
 
-  if (
-    !user &&
-    !request.nextUrl.pathname.startsWith('/login') &&
-    !request.nextUrl.pathname.startsWith('/auth') &&
-    request.nextUrl.pathname !== '/'
-  ) {
+  // Public routes — always accessible
+  const publicPaths = ['/', '/login', '/auth']
+  const isPublicRoute = publicPaths.some(p => 
+    request.nextUrl.pathname === p || request.nextUrl.pathname.startsWith(p + '/')
+  )
+
+  if (isPublicRoute) {
+    return supabaseResponse
+  }
+
+  // Protected routes — need auth OR demo mode
+  if (!user) {
+    // API routes: return 401 (demo mode doesn't call real APIs)
     if (request.nextUrl.pathname.startsWith('/api')) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
-    // no user, potentially respond by redirecting the user to the login page
+    
+    // Page routes: allow if demo mode is likely active
+    // We check via a custom header or cookie set by client-side demo activation
+    // Since localStorage isn't available in middleware, we set a cookie when demo starts
+    const demoFlag = request.cookies.get('agribud_demo_mode')?.value
+    if (demoFlag === 'true') {
+      return supabaseResponse
+    }
+    
+    // Not authenticated and not demo — redirect to login
     const url = request.nextUrl.clone()
     url.pathname = '/login'
     return NextResponse.redirect(url)
