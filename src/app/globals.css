@@ -356,3 +356,10 @@ input:focus, textarea:focus, select:focus {
     font-size: 0.9rem;
   }
 }
+
+/* Audio Recording Pulse Animation */
+@keyframes audioPulse {
+  0% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.4; transform: scale(0.85); }
+  100% { opacity: 1; transform: scale(1); }
+}

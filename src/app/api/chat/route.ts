@@ -2,6 +2,10 @@ import { NextResponse } from 'next/server';
 import { getGeminiModel } from '@/lib/gemini';
 import { createClient } from '@/utils/supabase/server';
 
+// ── Weather Cache (2-hour TTL, persists across requests in same server process) ──
+const WEATHER_CACHE_TTL = 2 * 60 * 60 * 1000; // 2 hours in ms
+const weatherCache = new Map<string, { data: string; timestamp: number }>();
+
 export async function POST(req: Request) {
   try {
     const supabase = await createClient();
@@ -25,7 +29,11 @@ export async function POST(req: Request) {
     }
 
     const isNewSession = !sessionId || sessionId === 'new';
-    const hasMedia = !!(geminiFileUri && mimeType);
+    // Check for actual non-empty values — upload route may return '' on partial failure
+    const hasMedia = !!(geminiFileUri && geminiFileUri.length > 0 && mimeType && mimeType.length > 0);
+    if (geminiFileUri || mimeType) {
+      console.log(`[AgriBud] Media attached: hasMedia=${hasMedia}, uri=${geminiFileUri?.substring(0, 50)}..., mime=${mimeType}`);
+    }
 
     const { data: profile } = await supabase.from('profiles').select('id, preferred_language').eq('id', user.id).single();
     if (!profile) { await supabase.from('profiles').insert({ id: user.id }); }
@@ -69,26 +77,79 @@ export async function POST(req: Request) {
     }
 
     // ──────────────────────────────────────────────────────────
-    // 2. Fetch Weather Context (Open-Meteo)
+    // 2. Resolve Coordinates (Geocode fallback if lat/lng missing)
     // ──────────────────────────────────────────────────────────
-    let weatherContext = "Weather data unavailable.";
-    if (lat && lng) {
+    if (!lat && !lng && sowingLocation && sowingLocation !== 'Not specified') {
       try {
-        const weatherRes = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lng}&current=temperature_2m,relative_humidity_2m,precipitation&daily=temperature_2m_max,temperature_2m_min,precipitation_sum&timezone=auto&forecast_days=3`);
-        const weatherData = await weatherRes.json();
-        const current = weatherData.current;
-        const daily = weatherData.daily;
+        const geoRes = await fetch(
+          `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(sowingLocation)}&limit=1`,
+          { headers: { 'User-Agent': 'AgriBud/1.0' } }
+        );
+        const geoData = await geoRes.json();
+        if (geoData && geoData.length > 0) {
+          lat = parseFloat(geoData[0].lat);
+          lng = parseFloat(geoData[0].lon);
+          // Backfill coordinates into the crop so future calls skip geocoding
+          // We need the crop ID — for new sessions it's `cropId`, for existing we fetch from session
+          const resolvedCropId = isNewSession ? cropId : (
+            await supabase.from('chat_sessions').select('crop_id').eq('id', sessionId).single()
+          ).data?.crop_id;
+          if (resolvedCropId) {
+            supabase.from('farmer_crops')
+              .update({ latitude: lat, longitude: lng })
+              .eq('id', resolvedCropId).then(() => {});
+          }
+        }
+      } catch (geoErr) {
+        console.error("Geocoding fallback failed:", geoErr);
+      }
+    }
 
-        weatherContext = `
-CURRENT WEATHER:
-- Temp: ${current.temperature_2m}°C, Humidity: ${current.relative_humidity_2m}%, Rain: ${current.precipitation}mm
+    // ──────────────────────────────────────────────────────────
+    // 3. Fetch Weather Context (Open-Meteo, 2-hour cache)
+    // ──────────────────────────────────────────────────────────
+    let weatherContext = "Weather data unavailable — crop location not set.";
+    if (lat && lng) {
+      const cacheKey = `${lat.toFixed(2)}_${lng.toFixed(2)}`;
+      const cached = weatherCache.get(cacheKey);
+      const now = Date.now();
+
+      if (cached && (now - cached.timestamp) < WEATHER_CACHE_TTL) {
+        weatherContext = cached.data;
+      } else {
+        try {
+          const weatherRes = await fetch(
+            `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lng}` +
+            `&current=temperature_2m,relative_humidity_2m,precipitation,wind_speed_10m` +
+            `&daily=temperature_2m_max,temperature_2m_min,precipitation_sum,precipitation_probability_max` +
+            `&timezone=auto&forecast_days=3`,
+            { signal: AbortSignal.timeout(5000) } // 5s timeout
+          );
+          const weatherData = await weatherRes.json();
+          const current = weatherData.current;
+          const daily = weatherData.daily;
+
+          weatherContext = `
+CURRENT WEATHER (Live):
+- Temperature: ${current.temperature_2m}°C
+- Humidity: ${current.relative_humidity_2m}%
+- Precipitation: ${current.precipitation}mm
+- Wind Speed: ${current.wind_speed_10m} km/h
 
 3-DAY FORECAST:
-- Tomorrow: ${daily.temperature_2m_min[1]}°C to ${daily.temperature_2m_max[1]}°C, Rain sum: ${daily.precipitation_sum[1]}mm
-- Day 2: ${daily.temperature_2m_min[2]}°C to ${daily.temperature_2m_max[2]}°C, Rain sum: ${daily.precipitation_sum[2]}mm
+- Today: ${daily.temperature_2m_min[0]}°C to ${daily.temperature_2m_max[0]}°C, Rain: ${daily.precipitation_sum[0]}mm (${daily.precipitation_probability_max?.[0] ?? '?'}% probability)
+- Tomorrow: ${daily.temperature_2m_min[1]}°C to ${daily.temperature_2m_max[1]}°C, Rain: ${daily.precipitation_sum[1]}mm (${daily.precipitation_probability_max?.[1] ?? '?'}% probability)
+- Day After: ${daily.temperature_2m_min[2]}°C to ${daily.temperature_2m_max[2]}°C, Rain: ${daily.precipitation_sum[2]}mm (${daily.precipitation_probability_max?.[2] ?? '?'}% probability)
 `;
-      } catch (weatherErr) {
-        console.error("Weather fetch failed:", weatherErr);
+          // Cache the result
+          weatherCache.set(cacheKey, { data: weatherContext, timestamp: now });
+        } catch (weatherErr) {
+          console.error("Weather fetch failed:", weatherErr);
+          // Use stale cache if available
+          if (cached) {
+            weatherContext = cached.data + "\n(Note: Weather data may be stale — fetched earlier)";
+          }
+        }
       }
     }
 
@@ -164,6 +225,13 @@ You MUST respond ENTIRELY in ${language} using its native script.
     const systemInstruction = `You are AgriBud, an elite agricultural AI expert for Indian farmers.
 - CROP: ${cropName} (Sown: ${sowingDate}, Location: ${sowingLocation})
 
+${hasMedia ? `MEDIA ANALYSIS (CRITICAL):
+The user has attached a media file (${mimeType}). You MUST analyze it thoroughly:
+- If it is an IMAGE: Examine every visible detail — leaf color, spots, lesions, pest bodies, soil condition, growth stage. Identify the specific disease or pest.
+- If it is a VIDEO: Watch the entire clip. Describe plant movement, pest behavior, disease spread, environmental conditions shown.
+- If it is AUDIO: Listen carefully. The farmer may be describing symptoms verbally. Transcribe and respond to their spoken concerns.
+Do NOT say "I cannot see/hear the media." You CAN and MUST analyze the attached file.
+` : ''}
 ${languageInstruction}
 
 LOCAL WEATHER CONTEXT:

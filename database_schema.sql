@@ -268,5 +268,47 @@ INSERT WITH CHECK (
 END IF;
 END $$;
 -- 6. Setup Storage for Chat Media
--- Storage handling via SQL Editor (Requires manual check in Supabase Dashboard)
--- INSERT INTO storage.buckets (id, name, public) VALUES ('chat_media', 'chat_media', true) ON CONFLICT DO NOTHING;
+-- Run this in Supabase SQL Editor to create the storage bucket and policies
+INSERT INTO storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+VALUES (
+  'chat_media', 
+  'chat_media', 
+  true,
+  52428800,  -- 50MB max file size
+  ARRAY['image/jpeg', 'image/png', 'image/webp', 'image/gif', 'video/mp4', 'video/webm', 'audio/mpeg', 'audio/wav', 'audio/ogg', 'audio/webm']
+) ON CONFLICT (id) DO UPDATE SET 
+  public = true,
+  file_size_limit = 52428800,
+  allowed_mime_types = ARRAY['image/jpeg', 'image/png', 'image/webp', 'image/gif', 'video/mp4', 'video/webm', 'audio/mpeg', 'audio/wav', 'audio/ogg', 'audio/webm'];
+
+-- Storage RLS Policies
+-- Allow authenticated users to upload media to their own folder
+DO $$ BEGIN
+IF NOT EXISTS (
+    SELECT 1 FROM pg_policies WHERE policyname = 'Users can upload own media'
+) THEN
+CREATE POLICY "Users can upload own media" ON storage.objects FOR INSERT
+WITH CHECK (
+    bucket_id = 'chat_media' AND
+    auth.uid()::text = (storage.foldername(name))[1]
+);
+END IF;
+
+IF NOT EXISTS (
+    SELECT 1 FROM pg_policies WHERE policyname = 'Users can view own media'
+) THEN
+CREATE POLICY "Users can view own media" ON storage.objects FOR SELECT
+USING (
+    bucket_id = 'chat_media' AND
+    auth.uid()::text = (storage.foldername(name))[1]
+);
+END IF;
+
+-- Allow public read access since bucket is public (for displaying in chat)
+IF NOT EXISTS (
+    SELECT 1 FROM pg_policies WHERE policyname = 'Public can view chat media'
+) THEN
+CREATE POLICY "Public can view chat media" ON storage.objects FOR SELECT
+USING (bucket_id = 'chat_media');
+END IF;
+END $$;

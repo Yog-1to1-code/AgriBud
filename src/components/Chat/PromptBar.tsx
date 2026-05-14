@@ -1,6 +1,6 @@
 "use client";
-import React, { useState, useRef } from 'react';
-import { Plus, Mic, Send, Image as ImageIcon, Video, FileAudio, Camera, FolderOpen, X, Loader2, CheckCircle2, AlertCircle, ChevronLeft } from 'lucide-react';
+import React, { useState, useRef, useCallback } from 'react';
+import { Plus, Mic, Send, Image as ImageIcon, Video, FileAudio, Camera, FolderOpen, X, Loader2, CheckCircle2, AlertCircle, ChevronLeft, Circle, Square } from 'lucide-react';
 import WebMediaCapture from '../Camera/WebMediaCapture';
 import { useLanguage } from '@/contexts/LanguageContext';
 import { useDemo } from '@/contexts/DemoContext';
@@ -17,7 +17,7 @@ interface PromptBarProps {
   isLoading: boolean;
 }
 
-type MenuView = 'main' | 'image' | 'video';
+type MenuView = 'main' | 'image' | 'video' | 'audio';
 
 export default function PromptBar({ onSendMessage, isLoading }: PromptBarProps) {
   const { t, language } = useLanguage();
@@ -30,14 +30,21 @@ export default function PromptBar({ onSendMessage, isLoading }: PromptBarProps) 
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [captureMode, setCaptureMode] = useState<'photo' | 'video' | null>(null);
   const [isListening, setIsListening] = useState(false);
+  const [isRecordingAudio, setIsRecordingAudio] = useState(false);
+  const [audioRecordingTime, setAudioRecordingTime] = useState(0);
+  // STT language: defaults to the app's UI language, user can override by tapping badge
   const [sttLang, setSttLang] = useState(() => {
     if (typeof window !== 'undefined') {
-      return localStorage.getItem('agribud_stt_lang') || 'auto';
+      return localStorage.getItem('agribud_stt_lang') || language || 'en';
     }
-    return 'auto';
+    return 'en';
   });
   
   const recognitionRef = useRef<any>(null);
+  const audioRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioStreamRef = useRef<MediaStream | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
+  const audioTimerRef = useRef<NodeJS.Timeout | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const videoInputRef = useRef<HTMLInputElement>(null);
   const audioInputRef = useRef<HTMLInputElement>(null);
@@ -112,17 +119,15 @@ export default function PromptBar({ onSendMessage, isLoading }: PromptBarProps) 
     const recognition = new SpeechRecognition();
     recognitionRef.current = recognition;
 
-    // Language mapping for STT
-    // 'auto' mode: We use a broad Hindi recognizer which handles Hindi, Marathi,
-    // and accented English reasonably well for Indian users.
-    // Specific modes force exact language recognition.
+    // Each language gets its own recognizer — no "auto" since the browser
+    // Speech API cannot detect language automatically.
+    // EN = English text, HI = हिंदी text, MR = मराठी text
     const langMap: Record<string, string> = {
-      'auto': 'hi-IN',  // Hindi recognizer works best as "catch-all" for Indian languages
       'en': 'en-IN',
       'hi': 'hi-IN',
       'mr': 'mr-IN',
     };
-    recognition.lang = langMap[sttLang] || 'hi-IN';
+    recognition.lang = langMap[sttLang] || 'en-IN';
     recognition.continuous = false;
     recognition.interimResults = false;
     recognition.onstart = () => setIsListening(true);
@@ -136,8 +141,9 @@ export default function PromptBar({ onSendMessage, isLoading }: PromptBarProps) 
     recognition.start();
   };
 
+  // Cycle: EN → HI → MR → EN
   const cycleSttLang = () => {
-    const langs = ['auto', 'en', 'hi', 'mr'];
+    const langs = ['en', 'hi', 'mr'];
     const currentIdx = langs.indexOf(sttLang);
     const nextLang = langs[(currentIdx + 1) % langs.length];
     setSttLang(nextLang);
@@ -147,6 +153,107 @@ export default function PromptBar({ onSendMessage, isLoading }: PromptBarProps) 
   const openCapture = (mode: 'photo' | 'video') => {
     setCaptureMode(mode);
     closeMenu();
+  };
+
+  // ── Audio Recording ─────────────────────────────────────
+  const startAudioRecording = useCallback(async () => {
+    closeMenu();
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      audioStreamRef.current = stream;
+
+      // Find supported mime type
+      const mimeTypes = ['audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus', 'audio/mp4'];
+      let selectedMime = '';
+      for (const mime of mimeTypes) {
+        if (MediaRecorder.isTypeSupported(mime)) { selectedMime = mime; break; }
+      }
+      if (!selectedMime) {
+        alert('Audio recording not supported on this browser. Please use "From Files" instead.');
+        stream.getTracks().forEach(t => t.stop());
+        return;
+      }
+
+      const recorder = new MediaRecorder(stream, { mimeType: selectedMime });
+      audioRecorderRef.current = recorder;
+      audioChunksRef.current = [];
+
+      recorder.ondataavailable = (e) => {
+        if (e.data.size > 0) audioChunksRef.current.push(e.data);
+      };
+
+      recorder.onstop = () => {
+        // Stop all tracks
+        stream.getTracks().forEach(t => { t.stop(); t.enabled = false; });
+        audioStreamRef.current = null;
+        // Build file
+        const ext = selectedMime.includes('mp4') ? 'mp4' : selectedMime.includes('ogg') ? 'ogg' : 'webm';
+        const blob = new Blob(audioChunksRef.current, { type: selectedMime });
+        const file = new File([blob], `audio-${Date.now()}.${ext}`, { type: selectedMime });
+
+        if (isDemoMode) {
+          setIsUploading(true);
+          setTimeout(() => {
+            setUploadedMedia({
+              supabaseUrl: URL.createObjectURL(file),
+              geminiFileUri: 'demo-uri',
+              mimeType: file.type,
+              fileName: file.name,
+            });
+            setIsUploading(false);
+          }, 600);
+        } else {
+          uploadMedia(file);
+        }
+        setTimeout(() => textareaRef.current?.focus(), 100);
+      };
+
+      recorder.start(1000);
+      setIsRecordingAudio(true);
+      setAudioRecordingTime(0);
+      audioTimerRef.current = setInterval(() => {
+        setAudioRecordingTime(prev => prev + 1);
+      }, 1000);
+    } catch (err: any) {
+      console.error('Audio recording error:', err);
+      alert('Microphone access denied. Please allow microphone permissions.');
+    }
+  }, [isDemoMode]);
+
+  const stopAudioRecording = useCallback(() => {
+    if (audioRecorderRef.current && isRecordingAudio) {
+      audioRecorderRef.current.stop();
+      setIsRecordingAudio(false);
+      if (audioTimerRef.current) {
+        clearInterval(audioTimerRef.current);
+        audioTimerRef.current = null;
+      }
+    }
+  }, [isRecordingAudio]);
+
+  const cancelAudioRecording = useCallback(() => {
+    if (audioRecorderRef.current) {
+      // Remove the onstop handler to prevent file creation
+      audioRecorderRef.current.onstop = null;
+      if (audioRecorderRef.current.state !== 'inactive') {
+        audioRecorderRef.current.stop();
+      }
+    }
+    if (audioStreamRef.current) {
+      audioStreamRef.current.getTracks().forEach(t => { t.stop(); t.enabled = false; });
+      audioStreamRef.current = null;
+    }
+    setIsRecordingAudio(false);
+    if (audioTimerRef.current) {
+      clearInterval(audioTimerRef.current);
+      audioTimerRef.current = null;
+    }
+  }, []);
+
+  const formatRecTime = (seconds: number) => {
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${mins}:${secs.toString().padStart(2, '0')}`;
   };
 
   const handleCapture = async (file: File) => {
@@ -198,6 +305,48 @@ export default function PromptBar({ onSendMessage, isLoading }: PromptBarProps) 
         </div>
       )}
 
+      {/* Audio Recording Indicator */}
+      {isRecordingAudio && (
+        <div style={{ 
+          position: 'absolute', bottom: '100%', left: 'clamp(0.5rem, 2vw, 1.25rem)', right: 'clamp(0.5rem, 2vw, 1.25rem)', marginBottom: '0.5rem', 
+          padding: '0.6rem 0.75rem', borderRadius: 'var(--radius-md)', backgroundColor: 'white',
+          display: 'flex', alignItems: 'center', gap: '0.6rem',
+          border: '1px solid #fecaca',
+          boxShadow: 'var(--shadow-md)', zIndex: 10
+        }}>
+          {/* Pulsing red dot */}
+          <div style={{ 
+            width: '10px', height: '10px', borderRadius: '50%', 
+            backgroundColor: '#ef4444', flexShrink: 0,
+            animation: 'audioPulse 1s ease-in-out infinite',
+          }} />
+          
+          <span style={{ fontSize: '0.85rem', flex: 1, color: '#ef4444', fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>
+            Recording... {formatRecTime(audioRecordingTime)}
+          </span>
+          
+          {/* Cancel */}
+          <button 
+            onClick={cancelAudioRecording}
+            style={{ padding: '0.25rem', borderRadius: '50%', color: 'var(--text-muted)' }}
+          >
+            <X size={16} />
+          </button>
+          
+          {/* Stop & Save */}
+          <button 
+            onClick={stopAudioRecording}
+            style={{ 
+              padding: '0.3rem 0.7rem', borderRadius: 'var(--radius-sm)', 
+              backgroundColor: '#ef4444', color: 'white', 
+              fontSize: '0.75rem', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '0.3rem'
+            }}
+          >
+            <Square size={10} fill="white" /> Stop
+          </button>
+        </div>
+      )}
+
       {/* Input Bar */}
       <div style={{ 
         display: 'flex', alignItems: 'flex-end', gap: '0.5rem', padding: '0.4rem', 
@@ -233,7 +382,7 @@ export default function PromptBar({ onSendMessage, isLoading }: PromptBarProps) 
                 <>
                   <button onClick={() => setMenuView('image')} style={{ padding: '0.5rem 0.6rem', display: 'flex', alignItems: 'center', gap: '0.5rem', borderRadius: 'var(--radius-sm)', fontSize: '0.85rem' }} onMouseOver={(e) => e.currentTarget.style.backgroundColor = 'var(--bg-hover)'} onMouseOut={(e) => e.currentTarget.style.backgroundColor = 'transparent'}><ImageIcon size={15} /> {t('uploadPhoto')}</button>
                   <button onClick={() => setMenuView('video')} style={{ padding: '0.5rem 0.6rem', display: 'flex', alignItems: 'center', gap: '0.5rem', borderRadius: 'var(--radius-sm)', fontSize: '0.85rem' }} onMouseOver={(e) => e.currentTarget.style.backgroundColor = 'var(--bg-hover)'} onMouseOut={(e) => e.currentTarget.style.backgroundColor = 'transparent'}><Video size={15} /> {t('recordVideo')}</button>
-                  <button onClick={() => { audioInputRef.current?.click(); closeMenu(); }} style={{ padding: '0.5rem 0.6rem', display: 'flex', alignItems: 'center', gap: '0.5rem', borderRadius: 'var(--radius-sm)', fontSize: '0.85rem' }} onMouseOver={(e) => e.currentTarget.style.backgroundColor = 'var(--bg-hover)'} onMouseOut={(e) => e.currentTarget.style.backgroundColor = 'transparent'}><FileAudio size={15} /> {t('addAudio')}</button>
+                  <button onClick={() => setMenuView('audio')} style={{ padding: '0.5rem 0.6rem', display: 'flex', alignItems: 'center', gap: '0.5rem', borderRadius: 'var(--radius-sm)', fontSize: '0.85rem' }} onMouseOver={(e) => e.currentTarget.style.backgroundColor = 'var(--bg-hover)'} onMouseOut={(e) => e.currentTarget.style.backgroundColor = 'transparent'}><FileAudio size={15} /> {t('addAudio')}</button>
                 </>
               )}
 
@@ -250,6 +399,14 @@ export default function PromptBar({ onSendMessage, isLoading }: PromptBarProps) 
                   <button onClick={() => setMenuView('main')} style={{ padding: '0.35rem', display: 'flex', alignItems: 'center', gap: '0.3rem', color: 'var(--text-muted)', fontSize: '0.7rem' }}><ChevronLeft size={12} /> Back</button>
                   <button onClick={() => openCapture('video')} style={{ padding: '0.5rem 0.6rem', display: 'flex', alignItems: 'center', gap: '0.5rem', borderRadius: 'var(--radius-sm)', fontSize: '0.85rem' }} onMouseOver={(e) => e.currentTarget.style.backgroundColor = 'var(--bg-hover)'} onMouseOut={(e) => e.currentTarget.style.backgroundColor = 'transparent'}><Video size={15} /> Record Now</button>
                   <button onClick={() => { videoInputRef.current?.click(); closeMenu(); }} style={{ padding: '0.5rem 0.6rem', display: 'flex', alignItems: 'center', gap: '0.5rem', borderRadius: 'var(--radius-sm)', fontSize: '0.85rem' }} onMouseOver={(e) => e.currentTarget.style.backgroundColor = 'var(--bg-hover)'} onMouseOut={(e) => e.currentTarget.style.backgroundColor = 'transparent'}><FolderOpen size={15} /> Pick Video</button>
+                </>
+              )}
+
+              {menuView === 'audio' && (
+                <>
+                  <button onClick={() => setMenuView('main')} style={{ padding: '0.35rem', display: 'flex', alignItems: 'center', gap: '0.3rem', color: 'var(--text-muted)', fontSize: '0.7rem' }}><ChevronLeft size={12} /> Back</button>
+                  <button onClick={startAudioRecording} style={{ padding: '0.5rem 0.6rem', display: 'flex', alignItems: 'center', gap: '0.5rem', borderRadius: 'var(--radius-sm)', fontSize: '0.85rem' }} onMouseOver={(e) => e.currentTarget.style.backgroundColor = 'var(--bg-hover)'} onMouseOut={(e) => e.currentTarget.style.backgroundColor = 'transparent'}><Circle size={15} color="#ef4444" fill="#ef4444" /> Record Now</button>
+                  <button onClick={() => { audioInputRef.current?.click(); closeMenu(); }} style={{ padding: '0.5rem 0.6rem', display: 'flex', alignItems: 'center', gap: '0.5rem', borderRadius: 'var(--radius-sm)', fontSize: '0.85rem' }} onMouseOver={(e) => e.currentTarget.style.backgroundColor = 'var(--bg-hover)'} onMouseOut={(e) => e.currentTarget.style.backgroundColor = 'transparent'}><FolderOpen size={15} /> From Files</button>
                 </>
               )}
             </div>
@@ -288,20 +445,20 @@ export default function PromptBar({ onSendMessage, isLoading }: PromptBarProps) 
           >
             <Mic size={18} className={isListening ? 'animate-pulse' : ''} />
           </button>
-          {/* Language indicator badge — tap to cycle: AUTO → EN → HI → MR */}
+          {/* Language indicator badge — tap to cycle: EN → HI → MR */}
           <span 
             onClick={(e) => { e.stopPropagation(); cycleSttLang(); }}
             style={{ 
               position: 'absolute', top: '-4px', right: '-6px',
               fontSize: '0.5rem', fontWeight: 800, letterSpacing: '0.03em',
               color: 'white', 
-              backgroundColor: isListening ? '#ef4444' : (sttLang === 'auto' ? 'var(--accent, #ff9933)' : 'var(--primary)'),
+              backgroundColor: isListening ? '#ef4444' : 'var(--primary)',
               borderRadius: '4px', padding: '1px 3.5px', lineHeight: 1.3,
               cursor: 'pointer', userSelect: 'none',
               transition: 'background-color 0.2s',
             }}
           >
-            {sttLang === 'auto' ? 'A' : sttLang.toUpperCase()}
+            {sttLang.toUpperCase()}
           </span>
         </div>
 
