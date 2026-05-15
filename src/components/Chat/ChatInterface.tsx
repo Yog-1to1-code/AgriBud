@@ -72,19 +72,23 @@ export default function ChatInterface({ cropId, sessionId, onSessionChange, onTo
     }
   };
 
-  const sendMessage = async (input: string, media: { supabaseUrl?: string, geminiFileUri?: string, mimeType?: string } | null) => {
+  const sendMessage = async (input: string, mediaList: { supabaseUrl?: string, geminiFileUri?: string, mimeType?: string, fileName?: string }[]) => {
     const userMsg = { 
       role: 'user', 
       content: input, 
       id: Date.now().toString(), 
-      image_url: media?.supabaseUrl || null,
-      mimeType: media?.mimeType || null,
+      // Store all media URLs + types for preview
+      image_url: mediaList.length > 0 ? mediaList[0].supabaseUrl || null : null,
+      mimeType: mediaList.length > 0 ? mediaList[0].mimeType || null : null,
+      mediaList: mediaList.length > 0 ? mediaList.map(m => ({
+        url: m.supabaseUrl || '',
+        mimeType: m.mimeType || '',
+      })) : undefined,
     };
     setMessages(prev => [...prev, userMsg]);
     setIsLoading(true);
 
     if (isDemoMode) {
-      // In demo mode, simulate a delayed AI response
       let currentSessionId = sessionId;
       
       if (sessionId === 'new') {
@@ -92,13 +96,11 @@ export default function ChatInterface({ cropId, sessionId, onSessionChange, onTo
         const newSession = addDemoSession(cropId, title);
         currentSessionId = newSession.id;
         onSessionChange(currentSessionId);
-        // Add user message to demo store
         addDemoMessage(currentSessionId, userMsg);
       } else {
         addDemoMessage(currentSessionId, userMsg);
       }
 
-      // Simulate AI thinking delay
       await new Promise(resolve => setTimeout(resolve, 2500));
       
       const aiResponse = getDemoAIResponse();
@@ -122,10 +124,9 @@ export default function ChatInterface({ cropId, sessionId, onSessionChange, onTo
       formData.append('cropId', cropId);
       formData.append('sessionId', sessionId);
       
-      if (media) {
-        if (media.supabaseUrl) formData.append('supabaseUrl', media.supabaseUrl);
-        if (media.geminiFileUri) formData.append('geminiFileUri', media.geminiFileUri);
-        if (media.mimeType) formData.append('mimeType', media.mimeType);
+      // Send all media as JSON arrays
+      if (mediaList.length > 0) {
+        formData.append('mediaJson', JSON.stringify(mediaList));
       }
 
       const response = await fetch('/api/chat', { method: 'POST', body: formData });
@@ -223,51 +224,51 @@ export default function ChatInterface({ cropId, sessionId, onSessionChange, onTo
                     maxWidth: '100%',
                     overflow: 'hidden',
                   }}>
-                    {msg.image_url && (() => {
-                      // Determine media type from mimeType field or metadata
-                      const mime: string = msg.mimeType || msg.metadata?.mimeType || '';
-                      const url = msg.image_url;
-                      const isVideo = mime.startsWith('video/') || /\.(mp4|webm|mov|avi)$/i.test(url);
-                      const isAudio = mime.startsWith('audio/') || /\.(mp3|wav|ogg|webm|m4a)$/i.test(url);
+                    {/* Multi-media preview — uses mediaList array, falls back to single image_url */}
+                    {(() => {
+                      // Build list: check msg.mediaList (fresh), msg.metadata?.mediaList (from DB), or single image_url
+                      const items: { url: string; mimeType: string }[] = msg.mediaList || msg.metadata?.mediaList ||
+                        (msg.image_url ? [{ url: msg.image_url, mimeType: msg.mimeType || msg.metadata?.mimeType || '' }] : []);
+                      
+                      if (items.length === 0) return null;
 
-                      if (isVideo) {
-                        return (
-                          <div style={{ marginBottom: '0.75rem', borderRadius: 'var(--radius-sm)', overflow: 'hidden', border: '1px solid var(--border)', maxWidth: '100%' }}>
-                            <video 
-                              src={url} 
-                              controls 
-                              playsInline
-                              preload="metadata"
-                              style={{ maxWidth: '100%', maxHeight: '300px', display: 'block', borderRadius: 'var(--radius-sm)' }}
-                            />
-                          </div>
-                        );
-                      }
-
-                      if (isAudio) {
-                        return (
-                          <div style={{ 
-                            marginBottom: '0.75rem', padding: '0.6rem 0.75rem', 
-                            borderRadius: 'var(--radius-sm)', 
-                            backgroundColor: 'var(--bg-hover, #f5f5f5)', 
-                            border: '1px solid var(--border)',
-                            display: 'flex', alignItems: 'center', gap: '0.5rem',
-                          }}>
-                            <span style={{ fontSize: '1.2rem' }}>🎵</span>
-                            <audio 
-                              src={url} 
-                              controls 
-                              preload="metadata"
-                              style={{ flex: 1, height: '36px', minWidth: 0 }}
-                            />
-                          </div>
-                        );
-                      }
-
-                      // Default: image
                       return (
-                        <div style={{ marginBottom: '0.75rem', borderRadius: 'var(--radius-sm)', overflow: 'hidden', border: '1px solid var(--border)', display: 'inline-block', maxWidth: '100%' }}>
-                          <img src={url} alt="Crop Upload" style={{ maxWidth: '100%', maxHeight: '300px', display: 'block' }} />
+                        <div style={{ 
+                          marginBottom: '0.75rem', display: 'flex', flexWrap: 'wrap', gap: '0.5rem',
+                        }}>
+                          {items.map((item, idx) => {
+                            const mime = item.mimeType || '';
+                            const url = item.url;
+                            const isVideo = mime.startsWith('video/') || /\.(mp4|webm|mov|avi)$/i.test(url);
+                            const isAudio = mime.startsWith('audio/') || /\.(mp3|wav|ogg|webm|m4a)$/i.test(url);
+
+                            if (isVideo) {
+                              return (
+                                <div key={idx} style={{ borderRadius: 'var(--radius-sm)', overflow: 'hidden', border: '1px solid var(--border)', maxWidth: '100%' }}>
+                                  <video src={url} controls playsInline preload="metadata"
+                                    style={{ maxWidth: '100%', maxHeight: '250px', display: 'block' }} />
+                                </div>
+                              );
+                            }
+                            if (isAudio) {
+                              return (
+                                <div key={idx} style={{ 
+                                  padding: '0.5rem 0.6rem', borderRadius: 'var(--radius-sm)',
+                                  backgroundColor: 'var(--bg-hover, #f5f5f5)', border: '1px solid var(--border)',
+                                  display: 'flex', alignItems: 'center', gap: '0.4rem', width: '100%',
+                                }}>
+                                  <span style={{ fontSize: '1rem' }}>🎵</span>
+                                  <audio src={url} controls preload="metadata" style={{ flex: 1, height: '32px', minWidth: 0 }} />
+                                </div>
+                              );
+                            }
+                            // Image
+                            return (
+                              <div key={idx} style={{ borderRadius: 'var(--radius-sm)', overflow: 'hidden', border: '1px solid var(--border)', display: 'inline-block' }}>
+                                <img src={url} alt="Upload" style={{ maxWidth: items.length > 1 ? '140px' : '100%', maxHeight: '250px', display: 'block', objectFit: 'cover' }} />
+                              </div>
+                            );
+                          })}
                         </div>
                       );
                     })()}

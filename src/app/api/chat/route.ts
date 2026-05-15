@@ -20,19 +20,31 @@ export async function POST(req: Request) {
     const cropId = formData.get('cropId') as string;
     let sessionId = formData.get('sessionId') as string;
 
-    const supabaseUrl = formData.get('supabaseUrl') as string | null;
-    const geminiFileUri = formData.get('geminiFileUri') as string | null;
-    const mimeType = formData.get('mimeType') as string | null;
+    // Parse media — supports new multi-media JSON format + legacy single-field format
+    let mediaItems: { supabaseUrl?: string; geminiFileUri?: string; mimeType?: string }[] = [];
+    const mediaJson = formData.get('mediaJson') as string | null;
+    if (mediaJson) {
+      try { mediaItems = JSON.parse(mediaJson); } catch { }
+    } else {
+      // Legacy fallback: single media fields
+      const supabaseUrl = formData.get('supabaseUrl') as string | null;
+      const geminiFileUri = formData.get('geminiFileUri') as string | null;
+      const mimeType = formData.get('mimeType') as string | null;
+      if (geminiFileUri && mimeType) {
+        mediaItems = [{ supabaseUrl: supabaseUrl || '', geminiFileUri, mimeType }];
+      }
+    }
+    // Filter out items with empty Gemini URIs
+    mediaItems = mediaItems.filter(m => m.geminiFileUri && m.geminiFileUri.length > 0 && m.mimeType && m.mimeType.length > 0);
+    const hasMedia = mediaItems.length > 0;
 
     if (!prompt) {
       return NextResponse.json({ error: 'Prompt is required' }, { status: 400 });
     }
 
     const isNewSession = !sessionId || sessionId === 'new';
-    // Check for actual non-empty values — upload route may return '' on partial failure
-    const hasMedia = !!(geminiFileUri && geminiFileUri.length > 0 && mimeType && mimeType.length > 0);
-    if (geminiFileUri || mimeType) {
-      console.log(`[AgriBud] Media attached: hasMedia=${hasMedia}, uri=${geminiFileUri?.substring(0, 50)}..., mime=${mimeType}`);
+    if (hasMedia) {
+      console.log(`[AgriBud] ${mediaItems.length} media file(s) attached: ${mediaItems.map(m => m.mimeType).join(', ')}`);
     }
 
     const { data: profile } = await supabase.from('profiles').select('id, preferred_language').eq('id', user.id).single();
@@ -180,11 +192,13 @@ CURRENT WEATHER (Live):
     }
 
     // ──────────────────────────────────────────────────────────
-    // 5. Build Current Message Parts
+    // 5. Build Current Message Parts (all media files)
     // ──────────────────────────────────────────────────────────
     const currentParts: any[] = [{ text: prompt }];
     if (hasMedia) {
-      currentParts.push({ fileData: { fileUri: geminiFileUri, mimeType: mimeType } });
+      for (const item of mediaItems) {
+        currentParts.push({ fileData: { fileUri: item.geminiFileUri, mimeType: item.mimeType } });
+      }
     }
 
     // ──────────────────────────────────────────────────────────
@@ -226,11 +240,13 @@ You MUST respond ENTIRELY in ${language} using its native script.
 - CROP: ${cropName} (Sown: ${sowingDate}, Location: ${sowingLocation})
 
 ${hasMedia ? `MEDIA ANALYSIS (CRITICAL):
-The user has attached a media file (${mimeType}). You MUST analyze it thoroughly:
-- If it is an IMAGE: Examine every visible detail — leaf color, spots, lesions, pest bodies, soil condition, growth stage. Identify the specific disease or pest.
-- If it is a VIDEO: Watch the entire clip. Describe plant movement, pest behavior, disease spread, environmental conditions shown.
-- If it is AUDIO: Listen carefully. The farmer may be describing symptoms verbally. Transcribe and respond to their spoken concerns.
-Do NOT say "I cannot see/hear the media." You CAN and MUST analyze the attached file.
+The user has attached ${mediaItems.length} media file(s): ${mediaItems.map(m => m.mimeType).join(', ')}.
+You MUST analyze ALL of them thoroughly:
+- IMAGES: Examine every visible detail — leaf color, spots, lesions, pest bodies, soil condition, growth stage. Identify the specific disease or pest.
+- VIDEOS: Watch the entire clip. Describe plant movement, pest behavior, disease spread, environmental conditions shown.
+- AUDIO: Listen carefully. The farmer may be describing symptoms verbally. Transcribe and respond to their spoken concerns.
+If multiple files are attached, analyze EACH one and correlate findings across them.
+Do NOT say "I cannot see/hear the media." You CAN and MUST analyze ALL attached files.
 ` : ''}
 ${languageInstruction}
 
@@ -316,8 +332,16 @@ ${summaryText ? `\nPREVIOUS CONVERSATION CONTEXT:\n${summaryText}` : ''}`;
     // 10. Save Messages to Database
     // ──────────────────────────────────────────────────────────
     const userInsert = await supabase.from('chat_messages').insert({
-      session_id: sessionId, role: 'user', content: prompt, image_url: supabaseUrl,
-      metadata: { media_summary: mediaSummary, mimeType }
+      session_id: sessionId, role: 'user', content: prompt, 
+      image_url: mediaItems.length > 0 ? mediaItems[0].supabaseUrl || null : null,
+      metadata: { 
+        media_summary: mediaSummary, 
+        mimeType: mediaItems.length > 0 ? mediaItems[0].mimeType : null,
+        mediaList: mediaItems.length > 0 ? mediaItems.map(m => ({
+          url: m.supabaseUrl || '',
+          mimeType: m.mimeType || '',
+        })) : undefined,
+      }
     });
     
     // Small delay to guarantee Postgres timestamp ordering

@@ -13,7 +13,7 @@ interface MediaInfo {
 }
 
 interface PromptBarProps {
-  onSendMessage: (text: string, media: MediaInfo | null) => void;
+  onSendMessage: (text: string, mediaList: MediaInfo[]) => void;
   isLoading: boolean;
 }
 
@@ -26,7 +26,7 @@ export default function PromptBar({ onSendMessage, isLoading }: PromptBarProps) 
   const [isExpanded, setIsExpanded] = useState(false);
   const [menuView, setMenuView] = useState<MenuView>('main');
   const [isUploading, setIsUploading] = useState(false);
-  const [uploadedMedia, setUploadedMedia] = useState<MediaInfo | null>(null);
+  const [uploadedMedia, setUploadedMedia] = useState<MediaInfo[]>([]);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [captureMode, setCaptureMode] = useState<'photo' | 'video' | null>(null);
   const [isListening, setIsListening] = useState(false);
@@ -51,26 +51,27 @@ export default function PromptBar({ onSendMessage, isLoading }: PromptBarProps) 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
     closeMenu();
+    // Reset the input so the same file can be selected again
+    e.target.value = '';
 
-    if (isDemoMode) {
-      // In demo mode, simulate upload
-      setIsUploading(true);
-      await new Promise(resolve => setTimeout(resolve, 800));
-      setUploadedMedia({
-        supabaseUrl: URL.createObjectURL(file),
-        geminiFileUri: 'demo-uri',
-        mimeType: file.type,
-        fileName: file.name,
-      });
-      setIsUploading(false);
-      setTimeout(() => textareaRef.current?.focus(), 100);
-      return;
+    for (const file of Array.from(files)) {
+      if (isDemoMode) {
+        setIsUploading(true);
+        await new Promise(resolve => setTimeout(resolve, 500));
+        setUploadedMedia(prev => [...prev, {
+          supabaseUrl: URL.createObjectURL(file),
+          geminiFileUri: 'demo-uri',
+          mimeType: file.type,
+          fileName: file.name,
+        }]);
+        setIsUploading(false);
+      } else {
+        await uploadMedia(file);
+      }
     }
-
-    await uploadMedia(file);
     setTimeout(() => textareaRef.current?.focus(), 100);
   };
 
@@ -82,14 +83,13 @@ export default function PromptBar({ onSendMessage, isLoading }: PromptBarProps) 
   const uploadMedia = async (file: File) => {
     setIsUploading(true);
     setUploadError(null);
-    setUploadedMedia(null);
     try {
       const formData = new FormData();
       formData.append('media', file);
       const response = await fetch('/api/media/upload', { method: 'POST', body: formData });
       if (!response.ok) throw new Error('Upload failed');
       const data = await response.json();
-      setUploadedMedia(data);
+      setUploadedMedia(prev => [...prev, data]);
     } catch (err) {
       setUploadError(t('uploadFailed'));
     } finally {
@@ -98,12 +98,11 @@ export default function PromptBar({ onSendMessage, isLoading }: PromptBarProps) 
   };
 
   const handleSend = () => {
-    if (!input.trim() && !uploadedMedia) return;
+    if (!input.trim() && uploadedMedia.length === 0) return;
     if (isUploading) return;
     onSendMessage(input, uploadedMedia);
     setInput('');
-    setUploadedMedia(null);
-    // Reset textarea height
+    setUploadedMedia([]);
     if (textareaRef.current) {
       textareaRef.current.style.height = 'auto';
     }
@@ -194,12 +193,12 @@ export default function PromptBar({ onSendMessage, isLoading }: PromptBarProps) 
         if (isDemoMode) {
           setIsUploading(true);
           setTimeout(() => {
-            setUploadedMedia({
+            setUploadedMedia(prev => [...prev, {
               supabaseUrl: URL.createObjectURL(file),
               geminiFileUri: 'demo-uri',
               mimeType: file.type,
               fileName: file.name,
-            });
+            }]);
             setIsUploading(false);
           }, 600);
         } else {
@@ -260,12 +259,12 @@ export default function PromptBar({ onSendMessage, isLoading }: PromptBarProps) 
     if (isDemoMode) {
       setIsUploading(true);
       await new Promise(resolve => setTimeout(resolve, 800));
-      setUploadedMedia({
+      setUploadedMedia(prev => [...prev, {
         supabaseUrl: URL.createObjectURL(file),
         geminiFileUri: 'demo-uri',
         mimeType: file.type,
         fileName: file.name,
-      });
+      }]);
       setIsUploading(false);
     } else {
       uploadMedia(file);
@@ -284,24 +283,69 @@ export default function PromptBar({ onSendMessage, isLoading }: PromptBarProps) 
         />
       )}
 
-      {/* Upload Status */}
-      {(isUploading || uploadedMedia || uploadError) && (
+      {/* Attached Media Preview Strip */}
+      {(uploadedMedia.length > 0 || isUploading || uploadError) && (
         <div style={{ 
           position: 'absolute', bottom: '100%', left: 'clamp(0.5rem, 2vw, 1.25rem)', right: 'clamp(0.5rem, 2vw, 1.25rem)', marginBottom: '0.5rem', 
-          padding: '0.6rem 0.75rem', borderRadius: 'var(--radius-md)', backgroundColor: 'white',
-          display: 'flex', alignItems: 'center', gap: '0.6rem',
+          padding: '0.5rem', borderRadius: 'var(--radius-md)', backgroundColor: 'white',
           border: `1px solid ${uploadError ? '#fee2e2' : 'var(--border)'}`,
-          boxShadow: 'var(--shadow-md)', zIndex: 10
+          boxShadow: 'var(--shadow-md)', zIndex: 10,
+          display: 'flex', alignItems: 'center', gap: '0.5rem',
+          overflowX: 'auto',
         }}>
-          {isUploading ? <Loader2 className="animate-spin" size={16} color="var(--primary-light)" /> : 
-           uploadedMedia ? <CheckCircle2 size={16} color="var(--primary-light)" /> : 
-           <AlertCircle size={16} color="#ef4444" />}
-          
-          <span style={{ fontSize: '0.8rem', flex: 1, color: "var(--text-main)", fontWeight: 500 }}>
-            {isUploading ? t('preparingMedia') : (uploadedMedia ? t('mediaReady') : t('uploadFailed'))}
-          </span>
-          
-          {!isUploading && <button onClick={() => { setUploadedMedia(null); setUploadError(null); }}><X size={14} color="var(--text-muted)" /></button>}
+          {/* Uploaded media thumbnails */}
+          {uploadedMedia.map((m, i) => {
+            const isImg = m.mimeType.startsWith('image/');
+            const isVid = m.mimeType.startsWith('video/');
+            return (
+              <div key={i} style={{ 
+                position: 'relative', flexShrink: 0, width: '56px', height: '56px', 
+                borderRadius: '8px', overflow: 'hidden', border: '1px solid var(--border)',
+                backgroundColor: 'var(--bg-hover, #f5f5f5)',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+              }}>
+                {isImg ? (
+                  <img src={m.supabaseUrl} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                ) : isVid ? (
+                  <Video size={22} color="var(--text-muted)" />
+                ) : (
+                  <FileAudio size={22} color="var(--text-muted)" />
+                )}
+                {/* Remove button */}
+                <button 
+                  onClick={() => setUploadedMedia(prev => prev.filter((_, idx) => idx !== i))}
+                  style={{ 
+                    position: 'absolute', top: '2px', right: '2px', 
+                    width: '18px', height: '18px', borderRadius: '50%',
+                    backgroundColor: 'rgba(0,0,0,0.6)', color: 'white',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    padding: 0, lineHeight: 1,
+                  }}
+                >
+                  <X size={10} />
+                </button>
+              </div>
+            );
+          })}
+
+          {/* Uploading spinner */}
+          {isUploading && (
+            <div style={{ 
+              flexShrink: 0, width: '56px', height: '56px', borderRadius: '8px',
+              border: '2px dashed var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'center',
+            }}>
+              <Loader2 className="animate-spin" size={20} color="var(--primary-light)" />
+            </div>
+          )}
+
+          {/* Error state */}
+          {uploadError && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.75rem', color: '#ef4444' }}>
+              <AlertCircle size={14} />
+              <span>{uploadError}</span>
+              <button onClick={() => setUploadError(null)}><X size={12} /></button>
+            </div>
+          )}
         </div>
       )}
 
@@ -465,7 +509,7 @@ export default function PromptBar({ onSendMessage, isLoading }: PromptBarProps) 
         {/* Send */}
         <button 
           onClick={handleSend} 
-          disabled={isLoading || isUploading || (!input.trim() && !uploadedMedia)} 
+          disabled={isLoading || isUploading || (!input.trim() && uploadedMedia.length === 0)} 
           className="btn-primary" 
           style={{ width: '36px', height: '36px', minWidth: '36px', padding: 0, borderRadius: 'var(--radius-md)', flexShrink: 0 }}
         >
@@ -473,9 +517,9 @@ export default function PromptBar({ onSendMessage, isLoading }: PromptBarProps) 
         </button>
 
         {/* Hidden Inputs */}
-        <input type="file" accept="image/*" hidden ref={fileInputRef} onChange={handleFileSelect} />
-        <input type="file" accept="video/*" hidden ref={videoInputRef} onChange={handleFileSelect} />
-        <input type="file" accept="audio/*" hidden ref={audioInputRef} onChange={handleFileSelect} />
+        <input type="file" accept="image/*" hidden ref={fileInputRef} onChange={handleFileSelect} multiple />
+        <input type="file" accept="video/*" hidden ref={videoInputRef} onChange={handleFileSelect} multiple />
+        <input type="file" accept="audio/*" hidden ref={audioInputRef} onChange={handleFileSelect} multiple />
       </div>
     </div>
   );
