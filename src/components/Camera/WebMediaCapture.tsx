@@ -23,20 +23,48 @@ export default function WebMediaCapture({ mode, onCapture, onClose }: WebMediaCa
   const [recordingTime, setRecordingTime] = useState(0);
   const [facingMode, setFacingMode] = useState<'environment' | 'user'>('environment');
 
-  // ── Start Camera (runs once on mount, or when facingMode changes) ──
-  const startCamera = useCallback(async () => {
-    // Stop any existing stream first
+  // ── Kill all camera/mic tracks reliably ──
+  const killStream = useCallback(() => {
+    // Stop the recorder if active
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+      try { mediaRecorderRef.current.stop(); } catch {}
+    }
+    mediaRecorderRef.current = null;
+
+    // Clear timer
+    if (timerRef.current) {
+      clearInterval(timerRef.current);
+      timerRef.current = null;
+    }
+
+    // Detach from video element first (some browsers hold stream if srcObject is set)
+    if (videoRef.current) {
+      videoRef.current.pause();
+      videoRef.current.srcObject = null;
+    }
+
+    // Kill every track
     if (streamRef.current) {
-      streamRef.current.getTracks().forEach(t => { t.stop(); t.enabled = false; });
+      streamRef.current.getTracks().forEach(t => {
+        t.stop();
+        t.enabled = false;
+      });
       streamRef.current = null;
     }
 
+    setHasStream(false);
+    setIsRecording(false);
+    setRecordingTime(0);
+  }, []);
+
+  // ── Start Camera ──
+  const startCamera = useCallback(async () => {
+    killStream(); // ensure clean slate
+
     setIsInitializing(true);
     setError(null);
-    setHasStream(false);
 
     try {
-      // Try with ideal constraints first
       let mediaStream: MediaStream;
       try {
         mediaStream = await navigator.mediaDevices.getUserMedia({
@@ -44,7 +72,6 @@ export default function WebMediaCapture({ mode, onCapture, onClose }: WebMediaCa
           audio: mode === 'video',
         });
       } catch {
-        // Fallback: basic video only (some browsers don't support facingMode)
         mediaStream = await navigator.mediaDevices.getUserMedia({
           video: true,
           audio: mode === 'video',
@@ -56,7 +83,6 @@ export default function WebMediaCapture({ mode, onCapture, onClose }: WebMediaCa
 
       if (videoRef.current) {
         videoRef.current.srcObject = mediaStream;
-        // Wait for the video to actually be playing
         await new Promise<void>((resolve) => {
           const vid = videoRef.current!;
           vid.onloadedmetadata = () => { vid.play().then(resolve).catch(resolve); };
@@ -76,26 +102,12 @@ export default function WebMediaCapture({ mode, onCapture, onClose }: WebMediaCa
     } finally {
       setIsInitializing(false);
     }
-  }, [facingMode, mode]);
+  }, [facingMode, mode, killStream]);
 
   useEffect(() => {
     startCamera();
-
-    // Cleanup on unmount
-    return () => {
-      if (streamRef.current) {
-        streamRef.current.getTracks().forEach(t => { t.stop(); t.enabled = false; });
-        streamRef.current = null;
-      }
-      if (timerRef.current) {
-        clearInterval(timerRef.current);
-        timerRef.current = null;
-      }
-      if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
-        try { mediaRecorderRef.current.stop(); } catch {}
-      }
-    };
-  }, [startCamera]);
+    return () => { killStream(); };
+  }, [startCamera, killStream]);
 
   // ── Photo Capture ──
   const handleCapturePhoto = useCallback(() => {
@@ -103,7 +115,6 @@ export default function WebMediaCapture({ mode, onCapture, onClose }: WebMediaCa
     const video = videoRef.current;
     const canvas = canvasRef.current;
     
-    // Ensure we have valid video dimensions
     if (video.videoWidth === 0 || video.videoHeight === 0) {
       setError("Camera not ready yet. Please wait a moment and try again.");
       return;
@@ -114,32 +125,26 @@ export default function WebMediaCapture({ mode, onCapture, onClose }: WebMediaCa
     const context = canvas.getContext('2d');
     if (context) {
       context.drawImage(video, 0, 0, canvas.width, canvas.height);
+      // Kill stream IMMEDIATELY — don't wait for toBlob callback
+      killStream();
       canvas.toBlob((blob) => {
         if (blob) {
           const file = new File([blob], `capture-${Date.now()}.jpg`, { type: 'image/jpeg' });
-          // Stop stream before closing
-          if (streamRef.current) {
-            streamRef.current.getTracks().forEach(t => { t.stop(); t.enabled = false; });
-          }
           onCapture(file);
           onClose();
         }
       }, 'image/jpeg', 0.85);
     }
-  }, [hasStream, onCapture, onClose]);
+  }, [hasStream, onCapture, onClose, killStream]);
 
   // ── Video Recording ──
   const startVideoRecording = useCallback(() => {
     if (!streamRef.current) return;
 
-    // Find a supported mime type
     const mimeTypes = ['video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm', 'video/mp4'];
     let selectedMime = '';
     for (const mime of mimeTypes) {
-      if (MediaRecorder.isTypeSupported(mime)) {
-        selectedMime = mime;
-        break;
-      }
+      if (MediaRecorder.isTypeSupported(mime)) { selectedMime = mime; break; }
     }
 
     if (!selectedMime) {
@@ -161,10 +166,8 @@ export default function WebMediaCapture({ mode, onCapture, onClose }: WebMediaCa
         const blobType = selectedMime.includes('mp4') ? 'video/mp4' : 'video/webm';
         const blob = new Blob(chunksRef.current, { type: blobType });
         const file = new File([blob], `video-${Date.now()}.${ext}`, { type: blobType });
-        // Stop stream before closing
-        if (streamRef.current) {
-          streamRef.current.getTracks().forEach(t => { t.stop(); t.enabled = false; });
-        }
+        // Kill stream AFTER building the blob (stream data is already captured in chunks)
+        killStream();
         onCapture(file);
         onClose();
       };
@@ -174,21 +177,21 @@ export default function WebMediaCapture({ mode, onCapture, onClose }: WebMediaCa
         setIsRecording(false);
       };
 
-      recorder.start(1000); // Collect data every second
+      recorder.start(1000);
       setIsRecording(true);
       setRecordingTime(0);
 
-      // Start timer
       timerRef.current = setInterval(() => {
         setRecordingTime(prev => prev + 1);
       }, 1000);
     } catch (err: any) {
       setError(`Recording failed: ${err.message}`);
     }
-  }, [onCapture, onClose]);
+  }, [onCapture, onClose, killStream]);
 
   const stopVideoRecording = useCallback(() => {
     if (mediaRecorderRef.current && isRecording) {
+      // Just stop the recorder — the onstop handler will killStream + onCapture + onClose
       mediaRecorderRef.current.stop();
       setIsRecording(false);
       if (timerRef.current) {
@@ -200,9 +203,15 @@ export default function WebMediaCapture({ mode, onCapture, onClose }: WebMediaCa
 
   // ── Switch Camera ──
   const switchCamera = useCallback(() => {
-    if (isRecording) return; // Don't switch while recording
+    if (isRecording) return;
     setFacingMode(prev => prev === 'environment' ? 'user' : 'environment');
   }, [isRecording]);
+
+  // ── Close (always kill stream) ──
+  const handleClose = useCallback(() => {
+    killStream();
+    onClose();
+  }, [killStream, onClose]);
 
   const formatTime = (seconds: number) => {
     const mins = Math.floor(seconds / 60);
@@ -224,7 +233,6 @@ export default function WebMediaCapture({ mode, onCapture, onClose }: WebMediaCa
           muted 
           style={{ 
             width: '100%', height: '100%', objectFit: 'cover',
-            // Mirror front camera for natural selfie view
             transform: facingMode === 'user' ? 'scaleX(-1)' : 'none',
           }} 
         />
@@ -241,7 +249,7 @@ export default function WebMediaCapture({ mode, onCapture, onClose }: WebMediaCa
             <p style={{ fontSize: '0.95rem', lineHeight: 1.5, marginBottom: '1.25rem' }}>{error}</p>
             <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'center' }}>
               <button onClick={() => startCamera()} className="btn-primary" style={{ padding: '0.6rem 1.25rem', fontSize: '0.85rem' }}>Retry</button>
-              <button onClick={onClose} style={{ padding: '0.6rem 1.25rem', fontSize: '0.85rem', color: 'white', border: '1px solid rgba(255,255,255,0.3)', borderRadius: 'var(--radius-md)' }}>Close</button>
+              <button onClick={handleClose} style={{ padding: '0.6rem 1.25rem', fontSize: '0.85rem', color: 'white', border: '1px solid rgba(255,255,255,0.3)', borderRadius: 'var(--radius-md)' }}>Close</button>
             </div>
           </div>
         )}
@@ -264,7 +272,7 @@ export default function WebMediaCapture({ mode, onCapture, onClose }: WebMediaCa
       }}>
         {/* Close */}
         <button 
-          onClick={onClose} 
+          onClick={handleClose} 
           style={{ color: 'white', opacity: isRecording ? 0.3 : 1, padding: '0.5rem' }} 
           disabled={isRecording}
         >
