@@ -77,7 +77,8 @@ export default function ChatInterface({ cropId, sessionId, onSessionChange, onTo
       role: 'user', 
       content: input, 
       id: Date.now().toString(), 
-      image_url: media?.supabaseUrl || null 
+      image_url: media?.supabaseUrl || null,
+      mimeType: media?.mimeType || null,
     };
     setMessages(prev => [...prev, userMsg]);
     setIsLoading(true);
@@ -222,11 +223,54 @@ export default function ChatInterface({ cropId, sessionId, onSessionChange, onTo
                     maxWidth: '100%',
                     overflow: 'hidden',
                   }}>
-                    {msg.image_url && (
-                      <div style={{ marginBottom: '0.75rem', borderRadius: 'var(--radius-sm)', overflow: 'hidden', border: '1px solid var(--border)', display: 'inline-block', maxWidth: '100%' }}>
-                        <img src={msg.image_url} alt="Crop Upload" style={{ maxWidth: '100%', maxHeight: '300px', display: 'block' }} />
-                      </div>
-                    )}
+                    {msg.image_url && (() => {
+                      // Determine media type from mimeType field or metadata
+                      const mime: string = msg.mimeType || msg.metadata?.mimeType || '';
+                      const url = msg.image_url;
+                      const isVideo = mime.startsWith('video/') || /\.(mp4|webm|mov|avi)$/i.test(url);
+                      const isAudio = mime.startsWith('audio/') || /\.(mp3|wav|ogg|webm|m4a)$/i.test(url);
+
+                      if (isVideo) {
+                        return (
+                          <div style={{ marginBottom: '0.75rem', borderRadius: 'var(--radius-sm)', overflow: 'hidden', border: '1px solid var(--border)', maxWidth: '100%' }}>
+                            <video 
+                              src={url} 
+                              controls 
+                              playsInline
+                              preload="metadata"
+                              style={{ maxWidth: '100%', maxHeight: '300px', display: 'block', borderRadius: 'var(--radius-sm)' }}
+                            />
+                          </div>
+                        );
+                      }
+
+                      if (isAudio) {
+                        return (
+                          <div style={{ 
+                            marginBottom: '0.75rem', padding: '0.6rem 0.75rem', 
+                            borderRadius: 'var(--radius-sm)', 
+                            backgroundColor: 'var(--bg-hover, #f5f5f5)', 
+                            border: '1px solid var(--border)',
+                            display: 'flex', alignItems: 'center', gap: '0.5rem',
+                          }}>
+                            <span style={{ fontSize: '1.2rem' }}>🎵</span>
+                            <audio 
+                              src={url} 
+                              controls 
+                              preload="metadata"
+                              style={{ flex: 1, height: '36px', minWidth: 0 }}
+                            />
+                          </div>
+                        );
+                      }
+
+                      // Default: image
+                      return (
+                        <div style={{ marginBottom: '0.75rem', borderRadius: 'var(--radius-sm)', overflow: 'hidden', border: '1px solid var(--border)', display: 'inline-block', maxWidth: '100%' }}>
+                          <img src={url} alt="Crop Upload" style={{ maxWidth: '100%', maxHeight: '300px', display: 'block' }} />
+                        </div>
+                      );
+                    })()}
                     <div className="prose" style={{ maxWidth: '100%', overflow: 'hidden' }}>
                       <ReactMarkdown 
                         remarkPlugins={[remarkGfm]}
