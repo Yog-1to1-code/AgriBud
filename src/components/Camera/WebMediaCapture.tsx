@@ -23,7 +23,7 @@ export default function WebMediaCapture({ mode, onCapture, onClose }: WebMediaCa
   const [recordingTime, setRecordingTime] = useState(0);
   const [facingMode, setFacingMode] = useState<'environment' | 'user'>('environment');
 
-  // ── Kill all camera/mic tracks reliably ──
+  // ── Kill all camera/mic tracks reliably (macOS-safe) ──
   const killStream = useCallback(() => {
     // Stop the recorder if active
     if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
@@ -37,17 +37,20 @@ export default function WebMediaCapture({ mode, onCapture, onClose }: WebMediaCa
       timerRef.current = null;
     }
 
-    // Detach from video element first (some browsers hold stream if srcObject is set)
+    // Fully detach from video element — video.load() is required on
+    // macOS Safari/Chrome to actually release the camera hardware
     if (videoRef.current) {
       videoRef.current.pause();
       videoRef.current.srcObject = null;
+      videoRef.current.removeAttribute('src');
+      try { videoRef.current.load(); } catch {}
     }
 
-    // Kill every track
+    // Kill every track on the stream
     if (streamRef.current) {
       streamRef.current.getTracks().forEach(t => {
-        t.stop();
         t.enabled = false;
+        t.stop();
       });
       streamRef.current = null;
     }
@@ -157,6 +160,11 @@ export default function WebMediaCapture({ mode, onCapture, onClose }: WebMediaCa
       mediaRecorderRef.current = recorder;
       chunksRef.current = [];
       
+      // Capture stream reference locally — if the component unmounts before
+      // onstop fires, streamRef.current will be null, but these local 
+      // references survive and we can still kill the hardware camera.
+      const capturedStream = streamRef.current;
+
       recorder.ondataavailable = (e) => {
         if (e.data.size > 0) chunksRef.current.push(e.data);
       };
@@ -166,7 +174,11 @@ export default function WebMediaCapture({ mode, onCapture, onClose }: WebMediaCa
         const blobType = selectedMime.includes('mp4') ? 'video/mp4' : 'video/webm';
         const blob = new Blob(chunksRef.current, { type: blobType });
         const file = new File([blob], `video-${Date.now()}.${ext}`, { type: blobType });
-        // Kill stream AFTER building the blob (stream data is already captured in chunks)
+        
+        // Kill the captured stream directly (survives component unmount)
+        capturedStream.getTracks().forEach(t => { t.enabled = false; t.stop(); });
+        
+        // Also run full cleanup if component is still mounted
         killStream();
         onCapture(file);
         onClose();
@@ -191,12 +203,21 @@ export default function WebMediaCapture({ mode, onCapture, onClose }: WebMediaCa
 
   const stopVideoRecording = useCallback(() => {
     if (mediaRecorderRef.current && isRecording) {
-      // Just stop the recorder — the onstop handler will killStream + onCapture + onClose
       mediaRecorderRef.current.stop();
       setIsRecording(false);
       if (timerRef.current) {
         clearInterval(timerRef.current);
         timerRef.current = null;
+      }
+      // Kill stream tracks IMMEDIATELY — don't wait for async onstop
+      // (onstop will also try to kill, but this ensures instant release)
+      if (videoRef.current) {
+        videoRef.current.pause();
+        videoRef.current.srcObject = null;
+        try { videoRef.current.load(); } catch {}
+      }
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach(t => { t.enabled = false; t.stop(); });
       }
     }
   }, [isRecording]);
