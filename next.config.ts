@@ -15,6 +15,7 @@ const nextConfig: NextConfig = {
     "10.153.12.27",
     "10.244.77.92",
   ] as any,
+  output: "standalone",
 };
 
 export default nextConfig;
