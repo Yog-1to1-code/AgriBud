@@ -291,7 +291,7 @@ ${summaryText ? `\nPREVIOUS CONVERSATION CONTEXT:\n${summaryText}` : ''}`;
     // ──────────────────────────────────────────────────────────
     // 7. Single AI Call — Gets response + all metadata
     // ──────────────────────────────────────────────────────────
-    const model = getGeminiModel('gemini-2.5-flash', systemInstruction);
+    const model = getGeminiModel('gemini-2.5-pro', systemInstruction);
     const chat = model.startChat({ history: chatHistory });
     const result = await chat.sendMessage(currentParts);
     let fullResponse = result.response.text();

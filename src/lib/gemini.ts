@@ -17,7 +17,7 @@ export const getGeminiModel = (modelName: string = 'gemma-4-31b-it', systemInstr
   } catch (err) {
     // Fallback to a more stable model if initialization fails
     return genAI.getGenerativeModel({
-      model: 'gemini-1.5-flash',
+      model: 'gemini-2.5-pro',
       systemInstruction: systemInstruction
     });
   }
